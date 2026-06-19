@@ -1,0 +1,13 @@
+fastapi>=0.136.3
+openai>=2.8.1
+pydantic>=2.13.4
+pymysql>=1.1.2
+pypdf>=6.3.0
+python-docx>=1.2.0
+python-multipart>=0.0.20
+redis>=7.1.0
+sqlalchemy>=2.0.44
+uvicorn>=0.48.0
+sentence-transformers>=5.5.1
+pymilvus[milvus-lite]>=2.6.6,<3.0.0
+alembic>=1.17.2

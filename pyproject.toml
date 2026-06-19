@@ -1,0 +1,21 @@
+[project]
+name = "customer"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.136.3",
+    "openai>=2.8.1",
+    "redis>=7.1.0",
+    "sqlalchemy>=2.0.44",
+    "alembic>=1.17.2",
+    "pymysql>=1.1.2",
+    "pymilvus[milvus-lite]>=2.6.6,<3.0.0",
+    "pypdf>=6.3.0",
+    "python-docx>=1.2.0",
+    "python-multipart>=0.0.20",
+    "sentence-transformers>=5.5.1",
+    "uvicorn>=0.48.0",
+    "pydantic>=2.13.4",
+    "ipykernel>=7.2.0",
+    "pandas-stubs~=3.0.3",
+]

@@ -1,0 +1,14 @@
+.venv
+.env
+.idea
+__pycache__/
+*.py[cod]
+alembic/
+app/uploads/*
+milvus_demo.db/
+web/node_modules/
+web/dist/
+alembic.ini
+
+rag_bge_milvus_lite.db/
+test*
