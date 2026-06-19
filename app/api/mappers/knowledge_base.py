@@ -1,6 +1,6 @@
 """知识库 API 响应转换函数。"""
 
-from app.repositories.mysql_records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
+from app.repositories.mysql.records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
 from app.schemas.knowledge_base import (
     KnowledgeBaseResponse,
     KnowledgeChunkResponse,

@@ -7,7 +7,7 @@ import hmac
 import secrets
 from dataclasses import dataclass
 
-from app.repositories.mysql_records import UserRecord
+from app.repositories.mysql.records import UserRecord
 from app.repositories.mysql_repository import MySQLRepository
 
 

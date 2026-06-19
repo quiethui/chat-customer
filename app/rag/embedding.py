@@ -1,8 +1,12 @@
 """Embedding 生成工具。"""
 
 import hashlib
+import logging
 import math
 import re
+
+
+logger = logging.getLogger(__name__)
 
 
 class HashEmbedding:
@@ -50,6 +54,12 @@ def create_embedding(backend: str, model_name: str) -> HashEmbedding:
     """
     if backend == "sentence_transformers":
         return SentenceTransformerEmbedding(model_name)
+    # 哈希 embedding 没有语义，召回质量远低于真实模型，仅适合离线占位与本地开发。
+    logger.warning(
+        "EMBEDDING_BACKEND=%s 使用无语义的 HashEmbedding，RAG 召回质量较差；"
+        "生产请设置 EMBEDDING_BACKEND=sentence_transformers",
+        backend,
+    )
     return HashEmbedding()
 
 

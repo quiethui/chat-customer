@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.response import success_response
 from app.dependencies import get_current_user, get_message_service
-from app.repositories.mysql_records import ChatMessageRecord, UserRecord
+from app.repositories.mysql.records import ChatMessageRecord, UserRecord
 from app.schemas.message import ChatMessageResponse
 from app.services.message_service import MessageService
 

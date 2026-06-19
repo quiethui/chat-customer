@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.response import success_response
 from app.dependencies import get_chat_service, get_current_user, get_session_service
-from app.repositories.mysql_records import UserRecord
+from app.repositories.mysql.records import UserRecord
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
 from app.services.session_service import SessionService

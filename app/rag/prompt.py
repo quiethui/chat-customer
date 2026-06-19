@@ -19,7 +19,10 @@ def build_customer_prompt(
         拼接后的中文客服 Prompt，供 OpenAI 兼容模型生成最终回答。
     """
     context_text = "\n\n".join(f"[{index + 1}] {item}" for index, item in enumerate(contexts))
-    tool_text = "\n\n".join(f"[{index + 1}] {item}" for index, item in enumerate(tool_results or []))
+    if tool_results is None:
+        tool_text = "尚未查询；如用户问题涉及订单、物流、退款或售后，请先调用可用工具。"
+    else:
+        tool_text = "\n\n".join(f"[{index + 1}] {item}" for index, item in enumerate(tool_results))
     history_text = "\n".join(
         f"{_role_name(item.get('role', ''))}：{item.get('content', '')}" for item in (history or []) if item.get("content")
     )

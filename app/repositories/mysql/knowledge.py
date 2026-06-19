@@ -4,8 +4,8 @@ from sqlalchemy import delete, func, select, update
 
 from app.models import KnowledgeBase, KnowledgeChunk, KnowledgeFile
 from app.repositories.mysql.base import BaseMySQLMixin
-from app.repositories.mysql_mappers import map_knowledge_base, map_knowledge_chunk, map_knowledge_file
-from app.repositories.mysql_records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
+from app.repositories.mysql.mappers import map_knowledge_base, map_knowledge_chunk, map_knowledge_file
+from app.repositories.mysql.records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
 
 
 class KnowledgeMySQLMixin(BaseMySQLMixin):

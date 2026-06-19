@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
+from typing import Any
 
-from app.repositories.mysql_records import OrderRecord
+from app.repositories.mysql.records import OrderRecord
 from app.repositories.mysql_repository import MySQLRepository
 from app.tools.registry import ToolExecution
 
@@ -40,6 +41,32 @@ class OrderQueryTool:
     """
 
     name = "query_user_orders"
+    schema: dict[str, Any] = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": (
+                "查询当前登录用户可见的订单信息。用户询问订单状态、物流、发货、退款、"
+                "售后或最近订单时使用；没有订单号时可以查询最近订单，禁止编造订单号。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_no": {
+                        "type": "string",
+                        "description": "用户提供的订单号，例如 OD20260528001；没有提供时省略或传空字符串。",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "未指定订单号时返回最近订单数量，默认 5，范围 1 到 5。",
+                        "minimum": 1,
+                        "maximum": 5,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    }
 
     def __init__(self, mysql_repository: MySQLRepository, limit: int = 5) -> None:
         """初始化订单工具。
@@ -74,8 +101,27 @@ class OrderQueryTool:
         has_weak_intent = any(keyword in normalized_question for keyword in ORDER_WEAK_INTENT_KEYWORDS)
         return has_weak_intent and any(keyword in normalized_question for keyword in ("这单", "该订单", "订单"))
 
-    def call(self, user_id: int, question: str) -> ToolExecution:
+    def call(self, user_id: int, arguments: dict[str, Any]) -> ToolExecution:
         """查询当前用户订单并格式化为大模型可读文本。
+
+        Args:
+            user_id: 当前登录用户 ID，作为订单查询的强制过滤条件。
+            arguments: 模型通过 Function Calling 生成的结构化查询参数。
+
+        Returns:
+            ToolExecution，content 中包含订单查询结果或未命中提示。
+        """
+        order_no = self._normalize_order_no(arguments.get("order_no"))
+        limit = self._normalize_limit(arguments.get("limit"))
+        orders = self.mysql_repository.list_user_orders(user_id=user_id, order_no=order_no, limit=limit)
+        if not orders:
+            content = self._build_empty_result(order_no)
+        else:
+            content = self._build_order_result(orders, order_no)
+        return ToolExecution(name=self.name, content=content)
+
+    def call_from_question(self, user_id: int, question: str) -> ToolExecution:
+        """从问题文本中提取订单号并查询订单，用于本地 fallback。
 
         Args:
             user_id: 当前登录用户 ID，作为订单查询的强制过滤条件。
@@ -84,13 +130,7 @@ class OrderQueryTool:
         Returns:
             ToolExecution，content 中包含订单查询结果或未命中提示。
         """
-        order_no = self._extract_order_no(question)
-        orders = self.mysql_repository.list_user_orders(user_id=user_id, order_no=order_no, limit=self.limit)
-        if not orders:
-            content = self._build_empty_result(order_no)
-        else:
-            content = self._build_order_result(orders, order_no)
-        return ToolExecution(name=self.name, content=content)
+        return self.call(user_id, {"order_no": self._extract_order_no(question), "limit": self.limit})
 
     def _extract_order_no(self, question: str) -> str | None:
         """从用户问题中提取订单号。
@@ -103,6 +143,38 @@ class OrderQueryTool:
         """
         match = ORDER_NO_PATTERN.search(question)
         return match.group(0).upper() if match else None
+
+    def _normalize_order_no(self, value: object) -> str | None:
+        """规范化模型传入的订单号参数。
+
+        Args:
+            value: 模型生成的订单号参数，可能为空或非字符串。
+
+        Returns:
+            规范化后的订单号；没有有效订单号时返回 None。
+        """
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        match = ORDER_NO_PATTERN.search(stripped)
+        return match.group(0).upper() if match else stripped.upper()
+
+    def _normalize_limit(self, value: object) -> int:
+        """规范化模型传入的数量参数。
+
+        Args:
+            value: 模型生成的 limit 参数。
+
+        Returns:
+            限制在 1 到默认 limit 之间的整数。
+        """
+        try:
+            limit = int(value) if value is not None else self.limit
+        except (TypeError, ValueError):
+            limit = self.limit
+        return min(max(limit, 1), self.limit)
 
     def _build_empty_result(self, order_no: str | None) -> str:
         """构建订单未命中的工具结果文本。

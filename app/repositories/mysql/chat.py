@@ -6,8 +6,8 @@ from sqlalchemy import select, update
 
 from app.models import ChatMessage, ChatSession
 from app.repositories.mysql.base import BaseMySQLMixin
-from app.repositories.mysql_mappers import map_chat_message, map_chat_session
-from app.repositories.mysql_records import ChatMessageRecord, ChatSessionRecord
+from app.repositories.mysql.mappers import map_chat_message, map_chat_session
+from app.repositories.mysql.records import ChatMessageRecord, ChatSessionRecord
 
 
 class ChatMySQLMixin(BaseMySQLMixin):

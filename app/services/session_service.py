@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.repositories.context_repository import ContextRepository
-from app.repositories.mysql_records import ChatSessionRecord
+from app.repositories.mysql.records import ChatSessionRecord
 from app.repositories.mysql_repository import MySQLRepository
 
 

@@ -37,6 +37,8 @@ class Settings:
     redis_context_ttl_seconds: int  # Redis 聊天上下文过期时间，单位秒。
     chat_context_limit: int  # 每个会话最多缓存的历史消息条数。
     auth_session_ttl_minutes: int  # 登录会话 token 的有效期，单位分钟。
+    agent_max_tool_rounds: int  # Agent 单次问答允许的最大工具调用轮数。
+    cors_allow_origins: list[str]  # 允许跨域访问的前端来源列表，默认 ["*"]，生产应收紧为具体域名。
 
 
 def load_dotenv(dotenv_path: Path) -> None:
@@ -89,6 +91,8 @@ def get_settings() -> Settings:
         redis_context_ttl_seconds=_get_int_env("REDIS_CONTEXT_TTL_SECONDS", 86400),
         chat_context_limit=_get_int_env("CHAT_CONTEXT_LIMIT", 10),
         auth_session_ttl_minutes=_get_int_env("AUTH_SESSION_TTL_MINUTES", 1440),
+        agent_max_tool_rounds=_get_int_env("AGENT_MAX_TOOL_ROUNDS", 3),
+        cors_allow_origins=_get_list_env("CORS_ALLOW_ORIGINS", ["*"]),
     )
 
 
@@ -108,7 +112,7 @@ def _get_int_env(name: str, default: int) -> int:
     """读取整数环境变量，格式错误时返回默认值。
 
     Args:
-        name: 环境变量名或知识库名称。
+        name: 环境变量名。
         default: 环境变量缺失或格式错误时使用的默认值。
     """
     value = os.getenv(name)
@@ -118,3 +122,18 @@ def _get_int_env(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _get_list_env(name: str, default: list[str]) -> list[str]:
+    """读取逗号分隔的列表型环境变量，缺失时返回默认值。
+
+    Args:
+        name: 环境变量名。
+        default: 环境变量缺失或为空时使用的默认值。
+    """
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return items or default
+

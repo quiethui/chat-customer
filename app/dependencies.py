@@ -8,21 +8,22 @@ from pathlib import Path
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agent import AgentExecutor
 from app.core.config import Settings, get_settings
 from app.db.session import create_session_factory
-from app.llm.OpenAI import OpenAIClient
+from app.llm.openai_client import OpenAIClient
 from app.rag.embedding import HashEmbedding, create_embedding
 from app.repositories.context_repository import ContextRepository, RedisContextRepository
-from app.repositories.mysql_records import UserRecord
+from app.repositories.mysql.records import UserRecord
 from app.repositories.mysql_repository import MySQLRepository
 from app.repositories.vector import VectorRepository, create_vector_repository
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.knowledge_base_service import KnowledgeBaseService
-from app.services.knowledge_service import KnowledgeService
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
 from app.tools.order_tool import OrderQueryTool
+from app.tools.product_tool import ProductQueryTool
 from app.tools.registry import SimpleToolRegistry
 
 
@@ -107,6 +108,7 @@ def get_llm_client() -> OpenAIClient:
         settings.openai_model,
         settings.reference_limit,
         settings.reference_max_chars,
+        create_mysql_repository,
     )
 
 
@@ -136,12 +138,6 @@ def get_message_service(repository: MySQLRepository = Depends(get_mysql_reposito
         repository: 当前请求使用的 MySQL 仓储实例。
     """
     return MessageService(repository)
-
-
-def get_knowledge_service() -> KnowledgeService:
-    """返回知识库导入服务。"""
-    settings = get_app_settings()
-    return KnowledgeService(get_embedding(), get_vector_repository(), settings.chunk_size, settings.chunk_overlap)
 
 
 def get_knowledge_base_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> KnowledgeBaseService:
@@ -201,23 +197,37 @@ def process_knowledge_file_background(
 def get_tool_registry(repository: MySQLRepository = Depends(get_mysql_repository)) -> SimpleToolRegistry:
     """返回聊天工具注册表。
 
-    当前注册订单查询工具；后续新增业务查询能力时，在这里继续追加工具实例即可。
+    当前注册订单查询、商品查询工具；后续新增业务查询能力时，在这里继续追加工具实例即可。
 
     Args:
         repository: 当前请求使用的 MySQL 仓储实例。
     """
-    return SimpleToolRegistry([OrderQueryTool(repository)])
+    return SimpleToolRegistry([OrderQueryTool(repository), ProductQueryTool(repository)])
+
+
+def get_agent_executor(
+    tool_registry: SimpleToolRegistry = Depends(get_tool_registry),
+) -> AgentExecutor:
+    """返回远程模型工具调用执行器。
+
+    Args:
+        tool_registry: 聊天工具注册表实例。
+    """
+    settings = get_app_settings()
+    return AgentExecutor(get_llm_client(), tool_registry, settings.agent_max_tool_rounds)
 
 
 def get_chat_service(
     repository: MySQLRepository = Depends(get_mysql_repository),
     tool_registry: SimpleToolRegistry = Depends(get_tool_registry),
+    agent_executor: AgentExecutor = Depends(get_agent_executor),
 ) -> ChatService:
     """返回聊天问答服务。
 
     Args:
         repository: 当前请求使用的 MySQL 仓储实例。
         tool_registry: 聊天工具注册表实例。
+        agent_executor: 远程模型工具调用执行器。
     """
     settings = get_app_settings()
     return ChatService(
@@ -230,6 +240,7 @@ def get_chat_service(
         repository,
         get_context_repository(),
         tool_registry,
+        agent_executor,
     )
 
 

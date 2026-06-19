@@ -201,3 +201,58 @@ class KnowledgeChunk(Base):
         Index("idx_knowledge_chunks_base_file", "knowledge_base_id", "file_id"),  # 知识库文件切块查询索引。
         Index("idx_knowledge_chunks_vector_id", "vector_id"),  # 向量 ID 查询索引。
     )
+
+
+class LLMRequestLog(Base):
+    """大模型请求日志表 ORM 模型，记录每次 OpenAI 兼容接口调用的请求与响应。"""
+
+    __tablename__ = "llm_request_logs"
+
+    id: Mapped[int] = mapped_column(mysql.BIGINT(unsigned=True), primary_key=True, autoincrement=True)  # 日志自增主键。
+    model: Mapped[str] = mapped_column(String(100), nullable=False)  # 本次请求使用的模型名称。
+    base_url: Mapped[str | None] = mapped_column(String(500))  # OpenAI 兼容接口基础地址。
+    request_payload: Mapped[str] = mapped_column(mysql.MEDIUMTEXT, nullable=False)  # 完整请求参数 JSON。
+    response_payload: Mapped[str | None] = mapped_column(mysql.MEDIUMTEXT)  # 完整响应数据 JSON，失败时为空。
+    prompt_tokens: Mapped[int | None] = mapped_column(mysql.INTEGER(unsigned=True))  # 提示词消耗 token 数。
+    completion_tokens: Mapped[int | None] = mapped_column(mysql.INTEGER(unsigned=True))  # 补全消耗 token 数。
+    total_tokens: Mapped[int | None] = mapped_column(mysql.INTEGER(unsigned=True))  # 本次请求总消耗 token 数。
+    latency_ms: Mapped[int | None] = mapped_column(mysql.INTEGER(unsigned=True))  # 请求往返耗时（毫秒）。
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="success", server_default="success")  # 请求结果状态。
+    error_message: Mapped[str | None] = mapped_column(String(1000))  # 请求失败时的错误摘要。
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())  # 日志创建时间。
+
+    __table_args__ = (
+        Index("idx_llm_request_logs_model_created", "model", "created_at"),  # 按模型和时间查询索引。
+        Index("idx_llm_request_logs_status", "status"),  # 按请求结果状态查询索引。
+    )
+
+
+class Product(Base):
+    """商品表 ORM 模型，全局商品目录，供 AI 客服查询商品信息。"""
+
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(mysql.BIGINT(unsigned=True), primary_key=True, autoincrement=True)  # 商品自增主键。
+    product_sku: Mapped[str] = mapped_column(String(100), nullable=False)  # 商品 SKU，全局唯一。
+    name: Mapped[str] = mapped_column(String(255), nullable=False)  # 商品名称。
+    category: Mapped[str | None] = mapped_column(String(64))  # 商品类目。
+    price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False)  # 商品售价。
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="CNY", server_default="CNY")  # 售价币种。
+    stock: Mapped[int] = mapped_column(mysql.INTEGER(unsigned=True), nullable=False, default=0, server_default="0")  # 库存数量。
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="on_sale", server_default="on_sale")  # 商品状态编码。
+    description: Mapped[str | None] = mapped_column(String(500))  # 商品简介。
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())  # 商品创建时间。
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        server_onupdate=func.current_timestamp(),
+    )  # 商品更新时间。
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)  # 商品软删除时间。
+
+    __table_args__ = (
+        UniqueConstraint("product_sku", name="uk_products_sku"),  # 商品 SKU 唯一索引。
+        Index("idx_products_name", "name"),  # 商品名称查询索引。
+        Index("idx_products_category", "category"),  # 商品类目查询索引。
+        Index("idx_products_status", "status"),  # 商品状态查询索引。
+    )

@@ -1,6 +1,6 @@
 """聊天消息服务。"""
 
-from app.repositories.mysql_records import ChatMessageRecord
+from app.repositories.mysql.records import ChatMessageRecord
 from app.repositories.mysql_repository import MySQLRepository
 
 

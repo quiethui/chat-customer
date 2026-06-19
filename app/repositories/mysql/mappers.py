@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-from app.repositories.mysql_records import (
+from app.repositories.mysql.records import (
     AuthSessionRecord,
     ChatMessageRecord,
     ChatSessionRecord,
@@ -12,6 +12,7 @@ from app.repositories.mysql_records import (
     KnowledgeChunkRecord,
     KnowledgeFileRecord,
     OrderRecord,
+    ProductRecord,
     UserRecord,
 )
 
@@ -126,6 +127,27 @@ def map_order(row: Any) -> OrderRecord:
         paid_at=_optional(row, "paid_at"),
         shipped_at=_optional(row, "shipped_at"),
         remark=_optional(row, "remark"),
+        created_at=_field(row, "created_at"),
+        updated_at=_field(row, "updated_at"),
+    )
+
+
+def map_product(row: Any) -> ProductRecord:
+    """将商品表记录转换为 ProductRecord。
+
+    Args:
+        row: products 表对应的字典行或 ORM 对象。
+    """
+    return ProductRecord(
+        id=int(_field(row, "id")),
+        product_sku=str(_field(row, "product_sku")),
+        name=str(_field(row, "name")),
+        category=_optional(row, "category"),
+        price=Decimal(str(_field(row, "price"))),
+        currency=str(_optional(row, "currency", "CNY")),
+        stock=int(_optional(row, "stock", 0)),
+        status=str(_optional(row, "status", "on_sale")),
+        description=_optional(row, "description"),
         created_at=_field(row, "created_at"),
         updated_at=_field(row, "updated_at"),
     )

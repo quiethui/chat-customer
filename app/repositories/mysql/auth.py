@@ -6,8 +6,8 @@ from sqlalchemy import select, update
 
 from app.models import User, UserSession
 from app.repositories.mysql.base import BaseMySQLMixin
-from app.repositories.mysql_mappers import map_auth_session, map_user
-from app.repositories.mysql_records import AuthSessionRecord, UserRecord
+from app.repositories.mysql.mappers import map_auth_session, map_user
+from app.repositories.mysql.records import AuthSessionRecord, UserRecord
 
 
 class AuthMySQLMixin(BaseMySQLMixin):

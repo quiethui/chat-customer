@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, status
 from app.api.errors import run_with_value_error
 from app.core.response import success_response
 from app.dependencies import get_auth_service, get_bearer_token, get_current_user
-from app.repositories.mysql_records import UserRecord
+from app.repositories.mysql.records import UserRecord
 from app.schemas.auth import LoginRequest, LoginResponse, LoginUser, RegisterRequest
 from app.services.auth_service import AuthService
 

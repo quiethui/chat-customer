@@ -96,6 +96,27 @@ CREATE TABLE IF NOT EXISTS `user_orders` (
   CONSTRAINT `fk_user_orders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户订单表（供 AI 客服工具调用查询）';
 
+-- 商品表：全局商品目录（非用户私有），供 AI 客服查询商品价格、库存、规格等
+CREATE TABLE IF NOT EXISTS `products` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '商品自增主键',
+  `product_sku` VARCHAR(100) NOT NULL COMMENT '商品SKU编码，全局唯一，可与订单 product_sku 关联',
+  `name` VARCHAR(255) NOT NULL COMMENT '商品名称',
+  `category` VARCHAR(64) DEFAULT NULL COMMENT '商品类目，例如 数码配件、办公家居',
+  `price` DECIMAL(10,2) NOT NULL COMMENT '商品售价（应付），保留两位小数',
+  `currency` VARCHAR(10) NOT NULL DEFAULT 'CNY' COMMENT '售价币种，默认人民币 CNY',
+  `stock` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '商品库存数量',
+  `status` VARCHAR(32) NOT NULL DEFAULT 'on_sale' COMMENT '商品状态：on_sale=在售，off_shelf=已下架，sold_out=已售罄',
+  `description` VARCHAR(500) DEFAULT NULL COMMENT '商品简介，供客服回答商品咨询',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '商品创建时间',
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '商品最后更新时间',
+  `deleted_at` DATETIME DEFAULT NULL COMMENT '商品软删除时间；NULL 表示未删除',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_products_sku` (`product_sku`),
+  KEY `idx_products_name` (`name`),
+  KEY `idx_products_category` (`category`),
+  KEY `idx_products_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='商品表（供 AI 客服工具调用查询）';
+
 -- 知识库主表：支持订单知识库、商品知识库、售后知识库等多个知识库
 CREATE TABLE IF NOT EXISTS `knowledge_bases` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '知识库自增主键',
@@ -134,6 +155,25 @@ CREATE TABLE IF NOT EXISTS `knowledge_chunks` (
   CONSTRAINT `fk_knowledge_chunks_base_id` FOREIGN KEY (`knowledge_base_id`) REFERENCES `knowledge_bases` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_knowledge_chunks_file_id` FOREIGN KEY (`file_id`) REFERENCES `knowledge_files` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库切块表';
+
+-- 大模型请求日志表：记录每次调用 OpenAI 兼容接口的请求参数与响应数据，供排查和审计
+CREATE TABLE IF NOT EXISTS `llm_request_logs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '日志自增主键',
+  `model` VARCHAR(100) NOT NULL COMMENT '本次请求使用的模型名称',
+  `base_url` VARCHAR(500) DEFAULT NULL COMMENT 'OpenAI 兼容接口基础地址，便于区分不同模型服务来源',
+  `request_payload` MEDIUMTEXT NOT NULL COMMENT '完整请求参数 JSON，包含 model、messages、temperature、tools 等',
+  `response_payload` MEDIUMTEXT DEFAULT NULL COMMENT '完整响应数据 JSON（model_dump 结果）；请求失败时为空',
+  `prompt_tokens` INT UNSIGNED DEFAULT NULL COMMENT '提示词消耗 token 数，取自响应 usage；缺失时为空',
+  `completion_tokens` INT UNSIGNED DEFAULT NULL COMMENT '补全消耗 token 数，取自响应 usage；缺失时为空',
+  `total_tokens` INT UNSIGNED DEFAULT NULL COMMENT '本次请求总消耗 token 数，取自响应 usage；缺失时为空',
+  `latency_ms` INT UNSIGNED DEFAULT NULL COMMENT '请求往返耗时（毫秒）',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'success' COMMENT '请求结果：success=成功，error=失败',
+  `error_message` VARCHAR(1000) DEFAULT NULL COMMENT '请求失败时的错误摘要；成功时为空',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '日志创建时间（请求发生时间）',
+  PRIMARY KEY (`id`),
+  KEY `idx_llm_request_logs_model_created` (`model`, `created_at`),
+  KEY `idx_llm_request_logs_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='大模型请求日志表（记录每次请求参数与响应）';
 
 INSERT INTO `knowledge_bases` (`name`, `description`)
 VALUES
@@ -174,3 +214,22 @@ VALUES
   (1, 'OD202605150021', '双肩电脑包 防水款', 'BAG-WP-001', 1, 259.00, 'CNY', 'completed', '2026-05-15 11:25:00', '2026-05-16 10:00:00', '管理员', '138****0001', NULL, '2026-05-15 11:20:00'),
   (1, 'OD202605140022', '多口 USB 充电站 100W', 'CHG-STN-100', 1, 349.00, 'CNY', 'completed', '2026-05-14 17:40:00', '2026-05-15 12:00:00', '管理员', '138****0001', NULL, '2026-05-14 17:35:00')
 ON DUPLICATE KEY UPDATE `order_no` = VALUES(`order_no`);
+
+-- 商品种子数据：SKU 与订单种子保持一致，便于商品/订单两个工具交叉印证
+INSERT INTO `products` (
+  `product_sku`, `name`, `category`, `price`, `currency`, `stock`, `status`, `description`
+)
+VALUES
+  ('CUP-THERMO-001', '智能恒温水杯', '生活家居', 199.00, 'CNY', 320, 'on_sale', '316 不锈钢内胆，支持 APP 温度调节，续航 12 小时。'),
+  ('HEADSET-NC-002', '无线降噪耳机', '数码配件', 599.00, 'CNY', 56, 'on_sale', '主动降噪，蓝牙 5.3，单次续航 8 小时，充电盒总续航 30 小时。'),
+  ('KB-MECH-003', '机械键盘 K8 Pro', '数码配件', 349.00, 'CNY', 0, 'sold_out', '热插拔轴体，RGB 背光，支持有线/蓝牙双模。'),
+  ('SPK-BT-001', '便携蓝牙音箱', '数码配件', 159.00, 'CNY', 210, 'on_sale', 'IPX7 防水，360 度环绕音效，续航 15 小时。'),
+  ('HUB-TC-006', 'Type-C 六合一扩展坞', '数码配件', 269.00, 'CNY', 88, 'on_sale', '支持 4K HDMI 输出、PD 100W 快充、USB3.0 数据传输。'),
+  ('MON-4K-027', '4K 超清显示器 27寸', '电脑外设', 2199.00, 'CNY', 24, 'on_sale', '27 英寸 4K IPS 屏，95% DCI-P3 广色域，Type-C 一线连。'),
+  ('CHAIR-ERG-PRO', '人体工学椅 Pro', '办公家居', 1499.00, 'CNY', 12, 'on_sale', '可调腰托与扶手，网布透气，承重 150kg。'),
+  ('MOUSE-MX-001', '无线鼠标 MX Master', '电脑外设', 399.00, 'CNY', 130, 'on_sale', '8000DPI 高精度，支持多设备切换，电磁滚轮。'),
+  ('WATCH-S3-001', '智能手表 S3', '数码配件', 899.00, 'CNY', 0, 'off_shelf', '血氧心率监测，AMOLED 屏，50 米防水，已下架待换代。'),
+  ('PROJ-MINI-001', '迷你投影仪', '数码配件', 1299.00, 'CNY', 18, 'on_sale', '1080P 物理分辨率，自动对焦梯形校正，内置扬声器。'),
+  ('BAG-WP-001', '双肩电脑包 防水款', '生活家居', 259.00, 'CNY', 175, 'on_sale', '防泼水面料，可容纳 16 英寸笔记本，多隔层收纳。'),
+  ('CHG-GAN-065', '氮化镓快充头 65W', '数码配件', 129.00, 'CNY', 460, 'on_sale', '氮化镓技术，双 C 口 + 单 A 口，支持笔记本快充。')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);

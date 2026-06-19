@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from app.rag.embedding import HashEmbedding
 from app.rag.ingestion import parse_file_chunks
-from app.repositories.mysql_records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
+from app.repositories.mysql.records import KnowledgeBaseRecord, KnowledgeChunkRecord, KnowledgeFileRecord
 from app.repositories.mysql_repository import MySQLRepository
 from app.repositories.vector import VectorDocument, VectorRepository
 

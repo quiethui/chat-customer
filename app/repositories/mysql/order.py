@@ -4,8 +4,8 @@ from sqlalchemy import select
 
 from app.models import UserOrder
 from app.repositories.mysql.base import BaseMySQLMixin
-from app.repositories.mysql_mappers import map_order
-from app.repositories.mysql_records import OrderRecord
+from app.repositories.mysql.mappers import map_order
+from app.repositories.mysql.records import OrderRecord
 
 
 class OrderMySQLMixin(BaseMySQLMixin):

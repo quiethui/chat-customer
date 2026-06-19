@@ -8,10 +8,19 @@ from app.core.config import Settings
 from app.repositories.mysql.auth import AuthMySQLMixin
 from app.repositories.mysql.chat import ChatMySQLMixin
 from app.repositories.mysql.knowledge import KnowledgeMySQLMixin
+from app.repositories.mysql.llm_log import LLMLogMySQLMixin
 from app.repositories.mysql.order import OrderMySQLMixin
+from app.repositories.mysql.product import ProductMySQLMixin
 
 
-class MySQLRepository(AuthMySQLMixin, ChatMySQLMixin, KnowledgeMySQLMixin, OrderMySQLMixin):
+class MySQLRepository(
+    AuthMySQLMixin,
+    ChatMySQLMixin,
+    KnowledgeMySQLMixin,
+    OrderMySQLMixin,
+    ProductMySQLMixin,
+    LLMLogMySQLMixin,
+):
     """封装所有 MySQL 读写操作，业务层只能通过该类访问数据库。"""
 
     def __init__(self, settings: Settings, session: Session) -> None:

@@ -76,6 +76,23 @@ class OrderRecord:
 
 
 @dataclass(frozen=True)
+class ProductRecord:
+    """商品表记录（全局商品目录）。"""
+
+    id: int  # 商品自增主键。
+    product_sku: str  # 商品 SKU，全局唯一，可与订单 product_sku 关联。
+    name: str  # 商品名称。
+    category: str | None  # 商品类目，可能为空。
+    price: Decimal  # 商品售价。
+    currency: str  # 售价币种，例如 CNY。
+    stock: int  # 商品库存数量。
+    status: str  # 商品状态编码，例如 on_sale、off_shelf、sold_out。
+    description: str | None  # 商品简介，可能为空。
+    created_at: datetime  # 商品创建时间。
+    updated_at: datetime  # 商品更新时间。
+
+
+@dataclass(frozen=True)
 class KnowledgeBaseRecord:
     """知识库主表记录。"""
 

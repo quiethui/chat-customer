@@ -7,18 +7,25 @@ import logging
 from time import perf_counter
 from uuid import uuid4
 
-from app.llm.OpenAI import OpenAIClient
+from app.agent import AgentExecutor
+from app.llm.openai_client import OpenAIClient
 from app.rag.embedding import HashEmbedding
 from app.rag.prompt import build_customer_prompt
 from app.rag.selection import build_references, select_prompt_contexts
 from app.repositories.context_repository import ContextRepository
 from app.repositories.mysql_repository import MySQLRepository
-from app.repositories.vector import VectorRepository, VectorSearchFilter
+from app.repositories.vector import RetrievalResult, VectorRepository, VectorSearchFilter
 from app.services.chat_debug import build_rag_debug, format_rag_debug_answer
 from app.tools.registry import SimpleToolRegistry
 
 
 logger = logging.getLogger(__name__)
+
+
+# 向量检索候选池相对 TOP_K 的放大倍数与绝对上限：多文件知识库下扩大候选池，
+# 再用关键词重排精选进入 Prompt，避免相关 chunk 被其他文件挤掉。
+_SEARCH_POOL_MULTIPLIER = 5
+_SEARCH_POOL_MAX = 30
 
 
 @dataclass
@@ -47,6 +54,7 @@ class ChatService:
         mysql_repository: MySQLRepository,
         context_repository: ContextRepository,
         tool_registry: SimpleToolRegistry,
+        agent_executor: AgentExecutor,
     ) -> None:
         """初始化聊天服务依赖和引用展示配置。
 
@@ -59,7 +67,8 @@ class ChatService:
             reference_max_chars: 单条引用在本地兜底回答中的最大字符数。
             mysql_repository: MySQL 数据仓储实例。
             context_repository: 聊天上下文仓储实例。
-            tool_registry: Tool Calling 工具注册表实例。
+            tool_registry: Tool Calling 工具注册表实例，供本地 fallback 关键词触发使用。
+            agent_executor: 远程模型 Function Calling 工具调用执行器。
         """
         self.embedding = embedding
         self.repository = repository
@@ -70,6 +79,7 @@ class ChatService:
         self.mysql_repository = mysql_repository
         self.context_repository = context_repository
         self.tool_registry = tool_registry
+        self.agent_executor = agent_executor
 
     async def answer(
         self,
@@ -97,72 +107,170 @@ class ChatService:
         session_id = session_id or self._create_session(user_id, question)
         # 读取最近聊天上下文，返回可放入 Prompt 的历史消息列表。
         history = self._get_history(user_id, session_id)
-        # 调用可匹配的业务工具，返回用户可见的工具结果文本。
-        tool_results = self._call_tools(user_id, question, rag_test)
 
-        # RAG 主流程：问题向量化 -> 向量检索 -> 精选上下文 -> 拼接 Prompt -> 调用模型。
+        # RAG 检索：问题向量化 -> 向量检索 -> 精选上下文。
         start_time = perf_counter()
+        results, contexts, search_limit = self._retrieve(question, knowledge_base_ids, file_ids)
+        if rag_test:
+            return self._build_rag_test_result(question, contexts, history, results, search_limit, start_time, session_id)
+
+        # 用户消息先落库，确保即使后续模型调用失败也能保留用户输入。
+        self.mysql_repository.add_chat_message(session_id, user_id, "user", question)
+        self.mysql_repository.commit()
+
+        # 远程模型走 Function Calling，本地 fallback 走关键词触发，各自返回真正提交给模型的 Prompt。
+        answer, tool_results, prompt = await self._generate(user_id, question, contexts, history)
+        # 生成回答依据：业务工具结果优先，其后接知识库引用。
+        references = self._build_references(question, contexts, tool_results)
+        # 保存助手回复及引用，并把本轮问答写入 Redis 上下文，供下一轮对话使用。
+        self._persist_and_cache(user_id, session_id, question, answer, references)
+        return AnswerResult(answer=answer, references=references, session_id=session_id, prompt=prompt)
+
+    def _retrieve(
+        self,
+        question: str,
+        knowledge_base_ids: list[int] | None,
+        file_ids: list[int] | None,
+    ) -> tuple[list[RetrievalResult], list[str], int]:
+        """向量化问题并检索知识库，返回候选结果、精选上下文和本次候选数量。
+
+        Args:
+            question: 用户本轮输入的问题。
+            knowledge_base_ids: 可选知识库过滤 ID 列表。
+            file_ids: 可选文件过滤 ID 列表。
+
+        Returns:
+            向量检索候选结果、精选进入 Prompt 的上下文，以及本次检索候选数量。
+        """
         # 将用户问题转成向量，供向量库相似度检索使用。
         query_vector = self.embedding.embed(question)
-        # 多文件知识库下，如果只从向量库取 TOP_K 个候选，相关 chunk 容易被其他文件挤掉。
-        # 这里扩大候选池，再用关键词重排精选进入 Prompt，保持回答内容不膨胀。
-        search_limit = max(self.top_k, min(self.top_k * 5, 30))
+        search_limit = max(self.top_k, min(self.top_k * _SEARCH_POOL_MULTIPLIER, _SEARCH_POOL_MAX))
         # 默认只检索 active 文件，避免 failed/deleted/processing 的残留向量进入回答。
         filters = VectorSearchFilter(
             knowledge_base_ids=[str(item) for item in knowledge_base_ids] if knowledge_base_ids else None,
             file_ids=[str(item) for item in file_ids] if file_ids else None,
             file_statuses=["active"],
         )
-        # 根据问题向量检索知识库，返回候选知识片段。
+        # 根据问题向量检索知识库，并从候选片段中精选最适合放入 Prompt 的上下文。
         results = self.repository.search(query_vector, search_limit, filters)
-        # 从候选片段中精选最适合放入 Prompt 的上下文。
         contexts = select_prompt_contexts(question, results, self.top_k)
-        # 组装客服回答 Prompt，包含问题、知识库上下文、历史消息和工具结果。
-        prompt = build_customer_prompt(question, contexts, history, tool_results)
-        if rag_test:
-            elapsed_ms = round((perf_counter() - start_time) * 1000, 2)
-            # 构造 RAG 调试信息，返回检索耗时、候选片段和最终 Prompt。
-            rag_debug = build_rag_debug(
-                results,
-                contexts,
-                prompt,
-                search_limit,
-                elapsed_ms,
-                self._get_knowledge_base_name,
-            )
-            # 将结构化调试信息格式化成便于页面展示的文本回答。
-            answer = format_rag_debug_answer(rag_debug)
-            return AnswerResult(
-                answer=answer,
-                references=[],
-                session_id=session_id,
-                prompt=prompt,
-                rag_test=True,
-                rag_debug=rag_debug,
-            )
+        return results, contexts, search_limit
 
-        # 用户消息先落库，确保即使后续模型调用失败也能保留用户输入。
-        self.mysql_repository.add_chat_message(session_id, user_id, "user", question)
-        self.mysql_repository.commit()
-        # 调用大模型生成最终客服回答，返回回答文本。
+    def _build_rag_test_result(
+        self,
+        question: str,
+        contexts: list[str],
+        history: list[dict[str, str]],
+        results: list[RetrievalResult],
+        search_limit: int,
+        start_time: float,
+        session_id: str,
+    ) -> AnswerResult:
+        """组装 RAG 测试模式响应：只返回检索结果和 Prompt，不调用模型。
+
+        Args:
+            question: 用户本轮输入的问题。
+            contexts: 精选进入 Prompt 的上下文片段。
+            history: 当前会话的最近历史消息。
+            results: 向量检索返回的候选结果列表。
+            search_limit: 本次向量检索候选数量。
+            start_time: RAG 检索开始时间戳，用于统计耗时。
+            session_id: 本轮问答所属会话 ID。
+
+        Returns:
+            携带结构化调试信息的回答结果。
+        """
+        prompt = build_customer_prompt(question, contexts, history, [])
+        elapsed_ms = round((perf_counter() - start_time) * 1000, 2)
+        # 构造 RAG 调试信息，返回检索耗时、候选片段和最终 Prompt。
+        rag_debug = build_rag_debug(results, contexts, prompt, search_limit, elapsed_ms, self._get_knowledge_base_name)
+        # 将结构化调试信息格式化成便于页面展示的文本回答。
+        return AnswerResult(
+            answer=format_rag_debug_answer(rag_debug),
+            references=[],
+            session_id=session_id,
+            prompt=prompt,
+            rag_test=True,
+            rag_debug=rag_debug,
+        )
+
+    async def _generate(
+        self,
+        user_id: int,
+        question: str,
+        contexts: list[str],
+        history: list[dict[str, str]],
+    ) -> tuple[str, list[str], str]:
+        """按模型可用性生成回答，返回回答、可见工具结果和真正提交给模型的 Prompt。
+
+        Args:
+            user_id: 当前用户 ID，用于工具执行时的数据隔离。
+            question: 用户本轮输入的问题。
+            contexts: 精选进入 Prompt 的上下文片段。
+            history: 当前会话的最近历史消息。
+
+        Returns:
+            模型最终回答、可展示的工具结果文本列表，以及真正提交给模型的 Prompt。
+        """
+        if self.llm_client.enabled:
+            # 远程模型路径：交给 AgentExecutor 驱动工具调用循环。模型基于工具 schema 自主
+            # 决定是否调用工具，工具结果通过独立 tool 消息回传，因此首轮 Prompt 即为真正
+            # 提交给模型的内容。
+            prompt = build_customer_prompt(question, contexts, history, None)
+            run_result = await self.agent_executor.run(user_id, prompt)
+            if run_result.trace:
+                logger.info(
+                    "Agent 工具调用完成：user_id=%s rounds=%s tools=%s",
+                    user_id,
+                    run_result.rounds,
+                    [step.name for step in run_result.trace],
+                )
+            return run_result.answer, run_result.tool_results, prompt
+        # 本地 fallback 没有模型工具选择能力，只保留旧的关键词触发以便离线演示可用。
+        tool_results = [item.content for item in self.tool_registry.call(user_id, question)]
+        prompt = build_customer_prompt(question, contexts, history, tool_results)
         answer = await self.llm_client.answer(prompt)
-        # 根据入选上下文生成引用列表，返回给前端展示回答依据。
+        return answer, tool_results, prompt
+
+    def _build_references(self, question: str, contexts: list[str], tool_results: list[str]) -> list[str]:
+        """生成回答依据列表：业务工具结果优先展示，其后接知识库引用。
+
+        Args:
+            question: 用户本轮输入的问题。
+            contexts: 精选进入 Prompt 的上下文片段。
+            tool_results: 本轮成功执行的可见工具结果文本列表。
+
+        Returns:
+            返回给前端展示的回答依据列表。
+        """
         references = build_references(question, contexts, self.reference_limit, self.reference_max_chars)
         if tool_results:
-            references = [*tool_results, *references]
+            return [*tool_results, *references]
+        return references
 
+    def _persist_and_cache(
+        self,
+        user_id: int,
+        session_id: str,
+        question: str,
+        answer: str,
+        references: list[str],
+    ) -> None:
+        """保存助手回复并将本轮问答写入 Redis 上下文缓存。
+
+        Args:
+            user_id: 当前用户 ID，用于数据隔离。
+            session_id: 本轮问答所属会话 ID。
+            question: 用户本轮输入的问题。
+            answer: 本轮生成的客服回答。
+            references: 本轮回答的引用依据列表。
+        """
         # 保存助手回复及引用，便于后续查看会话记录。
         self.mysql_repository.add_chat_message(
-            session_id,
-            user_id,
-            "assistant",
-            answer,
-            self.llm_client.model,
-            references=references,
+            session_id, user_id, "assistant", answer, self.llm_client.model, references=references,
         )
         # 将本轮问答追加到 Redis 上下文，供下一轮对话使用。
         self._append_context(user_id, session_id, question, answer)
-        return AnswerResult(answer=answer, references=references, session_id=session_id, prompt=prompt)
 
     def _get_knowledge_base_name(self, knowledge_base_id: str | None, cache: dict[str, str]) -> str | None:
         """根据知识库 ID 查询知识库名称，并使用本次请求内缓存减少数据库查询。
@@ -183,18 +291,6 @@ class ChatService:
             return None
         cache[knowledge_base_id] = record.name
         return record.name
-
-    def _call_tools(self, user_id: int, question: str, rag_test: bool) -> list[str]:
-        """按当前模式调用可用工具。
-
-        Args:
-            user_id: 当前用户 ID，用于数据隔离。
-            question: 用户输入的问题文本。
-            rag_test: 是否开启 RAG 测试模式。
-        """
-        if rag_test:
-            return []
-        return [item.content for item in self.tool_registry.call(user_id, question)]
 
     def _create_session(self, user_id: int, question: str) -> str:
         """为未指定会话的提问自动创建会话。

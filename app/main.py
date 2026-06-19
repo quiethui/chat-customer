@@ -14,7 +14,6 @@ from app.api.chat import router as chat_router
 from app.api.knowledge_base import router as knowledge_base_router
 from app.api.message import router as message_router
 from app.api.session import router as session_router
-from app.api.upload import router as upload_router
 from app.core.config import get_settings
 from app.core.response import (
     generic_exception_handler,
@@ -49,8 +48,9 @@ def create_app() -> FastAPI:
 
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=settings.cors_allow_origins,
+        # 带凭证的跨域请求不允许使用通配符来源，因此仅在收紧来源后才启用 credentials。
+        allow_credentials="*" not in settings.cors_allow_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -63,7 +63,6 @@ def create_app() -> FastAPI:
     application.include_router(knowledge_base_router)
     application.include_router(message_router)
     application.include_router(session_router)
-    application.include_router(upload_router)
 
     @application.get("/")
     async def root() -> dict[str, Any]:
