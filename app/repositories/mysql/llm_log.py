@@ -1,11 +1,45 @@
 """大模型请求日志 ORM 数据访问方法。"""
 
+from sqlalchemy import func, select
+
 from app.models import LLMRequestLog
 from app.repositories.mysql.base import BaseMySQLMixin
+from app.repositories.mysql.mappers import map_llm_request_log
+from app.repositories.mysql.records import LLMRequestLogRecord
 
 
 class LLMLogMySQLMixin(BaseMySQLMixin):
-    """封装大模型请求日志相关 MySQL 写操作。"""
+    """封装大模型请求日志相关 MySQL 读写操作。"""
+
+    def list_llm_request_logs(self, page: int, page_size: int) -> list[LLMRequestLogRecord]:
+        """分页查询大模型请求日志，按创建时间倒序。
+
+        Args:
+            page: 分页页码，从 1 开始。
+            page_size: 每页返回的记录数量。
+        """
+        offset = max(page - 1, 0) * page_size
+        rows = self._scalars(
+            select(LLMRequestLog)
+            .order_by(LLMRequestLog.created_at.desc(), LLMRequestLog.id.desc())
+            .limit(page_size)
+            .offset(offset)
+        )
+        return [map_llm_request_log(row) for row in rows]
+
+    def count_llm_request_logs(self) -> int:
+        """统计大模型请求日志总条数，用于分页。"""
+        total = self._scalar_one_or_none(select(func.count()).select_from(LLMRequestLog))
+        return int(total or 0)
+
+    def get_llm_request_log(self, log_id: int) -> LLMRequestLogRecord | None:
+        """按主键查询单条大模型请求日志详情，查不到返回 None。
+
+        Args:
+            log_id: 日志自增主键。
+        """
+        row = self._scalar_one_or_none(select(LLMRequestLog).where(LLMRequestLog.id == log_id).limit(1))
+        return map_llm_request_log(row) if row else None
 
     def add_llm_request_log(
         self,

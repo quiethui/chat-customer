@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.repositories.mysql.auth import AuthMySQLMixin
 from app.repositories.mysql.chat import ChatMySQLMixin
+from app.repositories.mysql.customer import CustomerMySQLMixin
 from app.repositories.mysql.knowledge import KnowledgeMySQLMixin
 from app.repositories.mysql.llm_log import LLMLogMySQLMixin
+from app.repositories.mysql.manager import ManagerManageMixin
 from app.repositories.mysql.order import OrderMySQLMixin
 from app.repositories.mysql.product import ProductMySQLMixin
 
@@ -16,10 +18,12 @@ from app.repositories.mysql.product import ProductMySQLMixin
 class MySQLRepository(
     AuthMySQLMixin,
     ChatMySQLMixin,
+    CustomerMySQLMixin,
     KnowledgeMySQLMixin,
     OrderMySQLMixin,
     ProductMySQLMixin,
     LLMLogMySQLMixin,
+    ManagerManageMixin,
 ):
     """封装所有 MySQL 读写操作，业务层只能通过该类访问数据库。"""
 

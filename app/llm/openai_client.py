@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +63,47 @@ class OpenAIClient:
             )
         message = await self.chat([{"role": "user", "content": prompt}])
         return str(message.get("content") or "")
+
+    async def stream_answer(self, prompt: str) -> AsyncIterator[str]:
+        """以增量方式生成回答：远程模型用 stream=True，未配置时回退为本地兜底答案分片。
+
+        Args:
+            prompt: 提交给大模型的完整 Prompt。
+
+        Yields:
+            回答的增量文本分片，供 SSE 逐段下发给客户端。
+        """
+        if not self.client:
+            # 本地兜底没有真实流式，按固定长度切分模拟逐段输出，保证客户端打字机体验一致。
+            answer = _fallback_answer(prompt, self.fallback_reference_limit, self.fallback_reference_max_chars)
+            for piece in split_for_stream(answer):
+                yield piece
+            return
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "stream": True,
+        }
+        start_time = perf_counter()
+        collected: list[str] = []
+        try:
+            stream = await self.client.chat.completions.create(**request)
+            async for chunk in stream:
+                choices = chunk.choices or []
+                if not choices:
+                    continue
+                text = getattr(choices[0].delta, "content", None)
+                if text:
+                    collected.append(text)
+                    yield text
+        except Exception as exc:
+            latency_ms = int((perf_counter() - start_time) * 1000)
+            await self._save_request_log(request, None, {}, latency_ms, "error", str(exc))
+            raise
+        latency_ms = int((perf_counter() - start_time) * 1000)
+        response_payload = {"choices": [{"message": {"role": "assistant", "content": "".join(collected)}}]}
+        await self._save_request_log(request, response_payload, {}, latency_ms, "success", None)
 
     async def chat(
         self,
@@ -180,6 +221,18 @@ class OpenAIClient:
             raise
         finally:
             repository.close()
+
+
+def split_for_stream(text: str, size: int = 24) -> list[str]:
+    """将完整回答按固定长度切分为多段，用于本地兜底或服务端伪流式逐段输出。
+
+    Args:
+        text: 待切分的完整回答文本。
+        size: 单段最大字符数。
+    """
+    if not text:
+        return []
+    return [text[index : index + size] for index in range(0, len(text), size)]
 
 
 def _fallback_answer(prompt: str, reference_limit: int, reference_max_chars: int) -> str:

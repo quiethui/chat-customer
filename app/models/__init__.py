@@ -3,25 +3,29 @@
 from app.models.customer import (
     ChatMessage,
     ChatSession,
+    Customer,
+    CustomerSession,
     KnowledgeBase,
     KnowledgeChunk,
     KnowledgeFile,
     LLMRequestLog,
+    Manager,
+    ManagerSession,
     Product,
-    User,
     UserOrder,
-    UserSession,
 )
 
 __all__ = [
     "ChatMessage",
     "ChatSession",
+    "Customer",
+    "CustomerSession",
     "KnowledgeBase",
     "KnowledgeChunk",
     "KnowledgeFile",
     "LLMRequestLog",
+    "Manager",
+    "ManagerSession",
     "Product",
-    "User",
     "UserOrder",
-    "UserSession",
 ]

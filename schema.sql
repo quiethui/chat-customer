@@ -7,73 +7,125 @@ CREATE DATABASE IF NOT EXISTS `customer_service`
 
 USE `customer_service`;
 
--- 用户表：存储系统注册用户的基本信息
-CREATE TABLE IF NOT EXISTS `users` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户自增主键',
-  `username` VARCHAR(64) NOT NULL COMMENT '用户登录名，全局唯一，用于登录和注册判重',
+-- 管理员表：存储管理后台用户（管理员/坐席）的基本信息
+CREATE TABLE IF NOT EXISTS `managers` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '管理员自增主键',
+  `username` VARCHAR(64) NOT NULL COMMENT '管理员登录名，全局唯一，用于登录和注册判重',
   `password_hash` CHAR(64) NOT NULL COMMENT '加盐哈希后的密码（SHA-256），不保存明文',
   `salt` VARCHAR(64) NOT NULL COMMENT '生成密码哈希时使用的随机盐值（32位十六进制）',
-  `nickname` VARCHAR(64) DEFAULT NULL COMMENT '用户昵称，展示用；为空时回退展示 username',
-  `avatar` VARCHAR(500) DEFAULT NULL COMMENT '用户头像 URL 地址；为空时前端展示默认头像',
-  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '用户状态：1=正常可登录，0=禁用',
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '用户注册时间',
-  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '用户信息最后更新时间',
+  `nickname` VARCHAR(64) DEFAULT NULL COMMENT '管理员昵称，展示用；为空时回退展示 username',
+  `avatar` VARCHAR(500) DEFAULT NULL COMMENT '管理员头像 URL 地址；为空时前端展示默认头像',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '管理员状态：1=正常可登录，0=禁用',
+  `is_admin` TINYINT NOT NULL DEFAULT 0 COMMENT '是否管理员：1=管理员，0=普通坐席',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '管理员注册时间',
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '管理员信息最后更新时间',
+  `deleted_at` DATETIME DEFAULT NULL COMMENT '软删除时间；NULL=未删除',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_users_username` (`username`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统用户表';
+  UNIQUE KEY `uk_managers_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='管理员表（管理后台用户/坐席）';
 
--- 用户登录会话表：存储用户的登录 Token 及过期时间
-CREATE TABLE IF NOT EXISTS `user_sessions` (
+-- 管理员登录会话表：存储管理员的登录 Token 及过期时间
+CREATE TABLE IF NOT EXISTS `manager_sessions` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '登录会话自增主键',
-  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '会话所属用户 ID，关联 users.id',
+  `manager_id` BIGINT UNSIGNED NOT NULL COMMENT '会话所属管理员 ID，关联 managers.id',
   `token` VARCHAR(128) NOT NULL COMMENT '登录凭证 Token，前端以 Bearer 方式携带在 Authorization 头中',
   `expires_at` DATETIME NOT NULL COMMENT 'Token 过期时间（UTC），过期后需重新登录',
   `revoked_at` DATETIME DEFAULT NULL COMMENT 'Token 撤销时间（退出登录时写入）；NULL 表示当前有效',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录会话创建时间',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_user_sessions_token` (`token`),
-  KEY `idx_user_sessions_user_id` (`user_id`),
-  KEY `idx_user_sessions_expires_at` (`expires_at`),
-  CONSTRAINT `fk_user_sessions_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户登录会话表（Token 管理）';
+  UNIQUE KEY `uk_manager_sessions_token` (`token`),
+  KEY `idx_manager_sessions_manager_id` (`manager_id`),
+  KEY `idx_manager_sessions_expires_at` (`expires_at`),
+  CONSTRAINT `fk_manager_sessions_manager_id` FOREIGN KEY (`manager_id`) REFERENCES `managers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='管理员登录会话表（Token 管理）';
 
--- 聊天会话表：存储用户的 AI 客服对话会话
+-- 客户表：对外 AI 客服的服务对象，含匿名访客与已注册客户
+CREATE TABLE IF NOT EXISTS `customers` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '客户自增主键',
+  `customer_no` VARCHAR(64) NOT NULL COMMENT '客户编号，全局唯一，对外展示与检索使用',
+  `username` VARCHAR(64) DEFAULT NULL COMMENT '登录账号，全局唯一；匿名访客为 NULL',
+  `nickname` VARCHAR(64) DEFAULT NULL COMMENT '客户昵称，展示用；匿名访客可自动生成',
+  `phone` VARCHAR(32) DEFAULT NULL COMMENT '客户手机号，可空（匿名访客无）',
+  `email` VARCHAR(128) DEFAULT NULL COMMENT '客户邮箱，可空',
+  `avatar` VARCHAR(500) DEFAULT NULL COMMENT '客户头像 URL；为空时前端展示默认头像',
+  `password_hash` CHAR(64) DEFAULT NULL COMMENT '加盐哈希后的密码（SHA-256）；匿名访客为空',
+  `salt` VARCHAR(64) DEFAULT NULL COMMENT '生成密码哈希使用的随机盐；匿名访客为空',
+  `source` VARCHAR(32) NOT NULL DEFAULT 'web' COMMENT '客户来源渠道，例如 web、widget、app',
+  `is_anonymous` TINYINT NOT NULL DEFAULT 1 COMMENT '是否匿名访客：1=匿名访客，0=已注册客户',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '客户状态：1=正常，0=禁用',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '客户创建时间',
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '客户信息最后更新时间',
+  `last_login_at` DATETIME DEFAULT NULL COMMENT '上次登录时间；匿名访客为空',
+  `last_login_ip` VARCHAR(64) DEFAULT NULL COMMENT '上次登录 IP（取 X-Forwarded-For 真实 IP）',
+  `deleted_at` DATETIME DEFAULT NULL COMMENT '软删除时间；NULL=未删除',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_customers_customer_no` (`customer_no`),
+  UNIQUE KEY `uk_customers_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='客户表（对外 AI 客服服务对象，含匿名访客）';
+
+-- 客户登录会话表：存储客户端 Token 及过期时间（镜像 manager_sessions）
+CREATE TABLE IF NOT EXISTS `customer_sessions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '客户会话自增主键',
+  `customer_id` BIGINT UNSIGNED NOT NULL COMMENT '会话所属客户 ID，关联 customers.id',
+  `token` VARCHAR(128) NOT NULL COMMENT '客户端登录凭证 Token，前端以 Bearer 方式携带在 Authorization 头中',
+  `expires_at` DATETIME NOT NULL COMMENT 'Token 过期时间（UTC），过期后需重新领取身份',
+  `revoked_at` DATETIME DEFAULT NULL COMMENT 'Token 撤销时间；NULL 表示当前有效',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '客户会话创建时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_customer_sessions_token` (`token`),
+  KEY `idx_customer_sessions_customer_id` (`customer_id`),
+  KEY `idx_customer_sessions_expires_at` (`expires_at`),
+  CONSTRAINT `fk_customer_sessions_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='客户登录会话表（Token 管理，镜像 manager_sessions）';
+
+-- 聊天会话表：存储客户的 AI 客服对话会话，并记录机器人/人工服务状态
 CREATE TABLE IF NOT EXISTS `chat_sessions` (
   `id` VARCHAR(64) NOT NULL COMMENT '会话 ID（UUID hex 字符串），前端用于标识一次对话',
-  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '会话所属用户 ID，用于数据隔离，关联 users.id',
-  `session_title` VARCHAR(120) NOT NULL COMMENT '会话标题，通常取用户首个问题的前120个字符',
-  `session_content` TEXT DEFAULT NULL COMMENT '会话摘要或用户首轮提问内容，用于会话列表预览',
-  `remark` VARCHAR(255) DEFAULT NULL COMMENT '会话备注信息，用户或系统可附加的说明',
+  `customer_id` BIGINT UNSIGNED NOT NULL COMMENT '会话所属客户 ID，用于数据隔离，关联 customers.id',
+  `session_title` VARCHAR(120) NOT NULL COMMENT '会话标题，通常取客户首个问题的前120个字符',
+  `session_content` TEXT DEFAULT NULL COMMENT '会话摘要或客户首轮提问内容，用于会话列表预览',
+  `remark` VARCHAR(255) DEFAULT NULL COMMENT '会话备注信息，客户或系统可附加的说明',
+  `mode` VARCHAR(20) NOT NULL DEFAULT 'bot' COMMENT '当前服务模式：bot=机器人，agent=人工坐席',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'bot' COMMENT '会话状态：bot=机器人服务中，waiting=等待人工接入，serving=人工服务中，closed=已结束',
+  `assigned_agent_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '当前接管坐席的管理员 ID，关联 managers.id；未接管为空',
+  `last_message_at` DATETIME DEFAULT NULL COMMENT '最近一条消息时间，用于坐席队列排序',
+  `rating` TINYINT DEFAULT NULL COMMENT '客户满意度评分（如 1-5）；未评价为空',
+  `rating_comment` VARCHAR(500) DEFAULT NULL COMMENT '客户满意度评价文字；未评价为空',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '会话创建时间',
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '会话最后更新时间（新消息写入时自动刷新）',
   `deleted_at` DATETIME DEFAULT NULL COMMENT '会话软删除时间；NULL 表示未删除，非空表示已移入回收站',
   PRIMARY KEY (`id`),
-  KEY `idx_chat_sessions_user_updated` (`user_id`, `updated_at`),
-  CONSTRAINT `fk_chat_sessions_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+  KEY `idx_chat_sessions_customer_updated` (`customer_id`, `updated_at`),
+  KEY `idx_chat_sessions_status_last_msg` (`status`, `last_message_at`),
+  CONSTRAINT `fk_chat_sessions_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_chat_sessions_agent_id` FOREIGN KEY (`assigned_agent_id`) REFERENCES `managers` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 客服聊天会话表';
 
--- 聊天消息表：存储会话中每一轮的用户提问和 AI 回复
+-- 聊天消息表：存储会话中每一轮的客户提问、机器人回复与人工坐席消息
 CREATE TABLE IF NOT EXISTS `chat_messages` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息自增主键',
   `session_id` VARCHAR(64) NOT NULL COMMENT '消息所属会话 ID，关联 chat_sessions.id',
-  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '消息所属用户 ID，用于数据隔离，关联 users.id',
-  `role` VARCHAR(20) NOT NULL COMMENT '消息角色：user=用户提问，assistant=AI 回复，system=系统消息',
+  `customer_id` BIGINT UNSIGNED NOT NULL COMMENT '消息所属客户 ID，用于数据隔离，关联 customers.id',
+  `role` VARCHAR(20) NOT NULL COMMENT '消息角色（供 LLM 上下文构建）：user=客户提问，assistant=AI 回复，system=系统消息',
+  `sender_type` VARCHAR(20) NOT NULL DEFAULT 'customer' COMMENT '消息发送方：customer=客户，bot=机器人，agent=人工坐席',
+  `agent_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '人工消息的坐席管理员 ID，关联 managers.id；非人工消息为空',
   `content` MEDIUMTEXT NOT NULL COMMENT '消息正文内容',
-  `model_name` VARCHAR(100) DEFAULT NULL COMMENT '助手回复使用的模型名称（如 gpt-4o）；用户消息为空',
+  `model_name` VARCHAR(100) DEFAULT NULL COMMENT '助手回复使用的模型名称（如 gpt-4o）；其他消息为空',
   `total_tokens` INT NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数；当前未精确统计时为 0',
   `references_text` MEDIUMTEXT DEFAULT NULL COMMENT '助手回答的引用来源，多条引用以换行符拼接；包含知识库检索结果和工具调用结果',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '消息创建时间',
   PRIMARY KEY (`id`),
   KEY `idx_chat_messages_session_id` (`session_id`, `id`),
-  KEY `idx_chat_messages_user_id` (`user_id`),
+  KEY `idx_chat_messages_customer_id` (`customer_id`),
   CONSTRAINT `fk_chat_messages_session_id` FOREIGN KEY (`session_id`) REFERENCES `chat_sessions` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_chat_messages_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_chat_messages_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_chat_messages_agent_id` FOREIGN KEY (`agent_id`) REFERENCES `managers` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI 客服聊天消息表';
 
--- 用户订单表：存储用户的订单信息，供 AI 客服查询
+-- 订单表：存储客户的订单信息，供 AI 客服工具查询（表名保留 user_orders）
 CREATE TABLE IF NOT EXISTS `user_orders` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '订单自增主键',
-  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '订单所属用户 ID，用于区分不同用户的订单数据',
+  `customer_id` BIGINT UNSIGNED NOT NULL COMMENT '订单所属客户 ID，用于区分不同客户的订单数据，关联 customers.id',
   `order_no` VARCHAR(64) NOT NULL COMMENT '订单号，对用户展示并支持按订单号查询，全局唯一',
   `product_name` VARCHAR(255) NOT NULL COMMENT '订单商品名称，当前保存订单中的主商品名称',
   `product_sku` VARCHAR(100) DEFAULT NULL COMMENT '商品SKU编码，可用于后续对接商品系统',
@@ -91,10 +143,10 @@ CREATE TABLE IF NOT EXISTS `user_orders` (
   `deleted_at` DATETIME DEFAULT NULL COMMENT '订单软删除时间；NULL 表示未删除',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_user_orders_order_no` (`order_no`),
-  KEY `idx_user_orders_user_created` (`user_id`, `created_at`),
-  KEY `idx_user_orders_user_status` (`user_id`, `order_status`),
-  CONSTRAINT `fk_user_orders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户订单表（供 AI 客服工具调用查询）';
+  KEY `idx_user_orders_customer_created` (`customer_id`, `created_at`),
+  KEY `idx_user_orders_customer_status` (`customer_id`, `order_status`),
+  CONSTRAINT `fk_user_orders_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单表（供 AI 客服工具调用查询）';
 
 -- 商品表：全局商品目录（非用户私有），供 AI 客服查询商品价格、库存、规格等
 CREATE TABLE IF NOT EXISTS `products` (
@@ -182,12 +234,17 @@ VALUES
   ('售后知识库', '退款、退货、换货、保修相关知识')
 ON DUPLICATE KEY UPDATE `description` = VALUES(`description`);
 
-INSERT INTO `users` (`username`, `password_hash`, `salt`, `nickname`, `status`)
-VALUES ('admin', '8855597499f16994bccfa99612dddfffa2bedf2ea48127c9868497575c11bff4', 'b319b5073f27d2bab5171d9ee7af0262', '管理员', 1)
-ON DUPLICATE KEY UPDATE `username` = VALUES(`username`);
+INSERT INTO `managers` (`username`, `password_hash`, `salt`, `nickname`, `status`, `is_admin`)
+VALUES ('admin', '8855597499f16994bccfa99612dddfffa2bedf2ea48127c9868497575c11bff4', 'b319b5073f27d2bab5171d9ee7af0262', '管理员', 1, 1)
+ON DUPLICATE KEY UPDATE `is_admin` = 1;
+
+-- 演示客户：承载下方演示订单（全新安装时为首行 customers，id=1）；匿名访客由客户端运行时按需创建
+INSERT INTO `customers` (`customer_no`, `nickname`, `phone`, `source`, `is_anonymous`, `status`)
+VALUES ('CUST-DEMO-0001', '演示客户', '138****0001', 'web', 0, 1)
+ON DUPLICATE KEY UPDATE `nickname` = VALUES(`nickname`);
 
 INSERT INTO `user_orders` (
-  `user_id`, `order_no`, `product_name`, `product_sku`, `product_quantity`, `order_amount`, `currency`,
+  `customer_id`, `order_no`, `product_name`, `product_sku`, `product_quantity`, `order_amount`, `currency`,
   `order_status`, `paid_at`, `shipped_at`, `receiver_name`, `receiver_phone`, `remark`, `created_at`
 )
 VALUES
@@ -233,3 +290,87 @@ VALUES
   ('BAG-WP-001', '双肩电脑包 防水款', '生活家居', 259.00, 'CNY', 175, 'on_sale', '防泼水面料，可容纳 16 英寸笔记本，多隔层收纳。'),
   ('CHG-GAN-065', '氮化镓快充头 65W', '数码配件', 129.00, 'CNY', 460, 'on_sale', '氮化镓技术，双 C 口 + 单 A 口，支持笔记本快充。')
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
+-- =====================================================================
+-- 对外 AI 客服改造（阶段 1A）：已有库升级脚本
+-- ---------------------------------------------------------------------
+-- 适用范围：仅当数据库已存在「旧结构」（chat_sessions/chat_messages/user_orders
+--          仍为 user_id）时使用。全新安装直接 `mysql < schema.sql` 即可，无需本节。
+-- 使用方法：上方已 `CREATE TABLE IF NOT EXISTS customers/customer_sessions` 并写入演示客户
+--          （id=1）。请将下列语句逐行去掉行首 `-- ` 后，在已有库中按顺序执行。
+-- 前提假设：旧库为演示数据，历史会话/订单均属 user_id=1，迁移后统一归到演示客户 id=1；
+--          若旧库存在多个用户的历史数据，需先为这些用户补建对应 customers 行，再重建外键。
+-- 依赖版本：RENAME COLUMN / RENAME INDEX 需 MySQL 8.0+。
+-- =====================================================================
+-- ALTER TABLE `user_orders`
+--   DROP FOREIGN KEY `fk_user_orders_user_id`;
+-- ALTER TABLE `user_orders`
+--   RENAME COLUMN `user_id` TO `customer_id`,
+--   RENAME INDEX `idx_user_orders_user_created` TO `idx_user_orders_customer_created`,
+--   RENAME INDEX `idx_user_orders_user_status`  TO `idx_user_orders_customer_status`,
+--   ADD CONSTRAINT `fk_user_orders_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE;
+--
+-- ALTER TABLE `chat_messages`
+--   DROP FOREIGN KEY `fk_chat_messages_user_id`;
+-- ALTER TABLE `chat_messages`
+--   RENAME COLUMN `user_id` TO `customer_id`,
+--   RENAME INDEX `idx_chat_messages_user_id` TO `idx_chat_messages_customer_id`,
+--   ADD COLUMN `sender_type` VARCHAR(20) NOT NULL DEFAULT 'customer' COMMENT '消息发送方：customer/bot/agent' AFTER `role`,
+--   ADD COLUMN `agent_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '人工消息的坐席用户 ID' AFTER `sender_type`,
+--   ADD CONSTRAINT `fk_chat_messages_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE,
+--   ADD CONSTRAINT `fk_chat_messages_agent_id` FOREIGN KEY (`agent_id`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+--
+-- ALTER TABLE `chat_sessions`
+--   DROP FOREIGN KEY `fk_chat_sessions_user_id`;
+-- ALTER TABLE `chat_sessions`
+--   RENAME COLUMN `user_id` TO `customer_id`,
+--   RENAME INDEX `idx_chat_sessions_user_updated` TO `idx_chat_sessions_customer_updated`,
+--   ADD COLUMN `mode` VARCHAR(20) NOT NULL DEFAULT 'bot' COMMENT '服务模式：bot/agent' AFTER `remark`,
+--   ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'bot' COMMENT '会话状态：bot/waiting/serving/closed' AFTER `mode`,
+--   ADD COLUMN `assigned_agent_id` BIGINT UNSIGNED DEFAULT NULL COMMENT '接管坐席用户 ID' AFTER `status`,
+--   ADD COLUMN `last_message_at` DATETIME DEFAULT NULL COMMENT '最近消息时间，用于坐席队列排序' AFTER `assigned_agent_id`,
+--   ADD COLUMN `rating` TINYINT DEFAULT NULL COMMENT '客户满意度评分' AFTER `last_message_at`,
+--   ADD COLUMN `rating_comment` VARCHAR(500) DEFAULT NULL COMMENT '客户满意度评价文字' AFTER `rating`,
+--   ADD KEY `idx_chat_sessions_status_last_msg` (`status`, `last_message_at`),
+--   ADD CONSTRAINT `fk_chat_sessions_customer_id` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE,
+--   ADD CONSTRAINT `fk_chat_sessions_agent_id` FOREIGN KEY (`assigned_agent_id`) REFERENCES `users` (`id`) ON DELETE SET NULL;
+
+-- =====================================================================
+-- 管理员重命名改造（阶段 1B）：users → managers
+-- ---------------------------------------------------------------------
+-- 适用范围：仅当数据库已存在旧的 users / user_sessions 表时使用。
+--          全新安装直接 `mysql < schema.sql` 即可，无需本节。
+-- 使用方法：将下列语句逐行去掉行首 `-- ` 后，在已有库中按顺序执行。
+-- 依赖版本：RENAME TABLE / RENAME COLUMN / RENAME INDEX 需 MySQL 8.0+。
+-- 说明：`RENAME TABLE users TO managers` 会自动把 chat_sessions / chat_messages
+--      指向 users 的外键重定向到 managers，约束名（fk_chat_*_agent_id）保持不变，
+--      无需重建；如需让约束名也体现 managers，可自行 DROP/ADD（非必需）。
+-- =====================================================================
+# -- RENAME TABLE `users` TO `managers`;
+# -- ALTER TABLE `managers`
+# --   RENAME INDEX `uk_users_username` TO `uk_managers_username`;
+# --
+-- ALTER TABLE `user_sessions`
+--   DROP FOREIGN KEY `fk_user_sessions_user_id`;
+-- RENAME TABLE `user_sessions` TO `manager_sessions`;
+-- ALTER TABLE `manager_sessions`
+--   RENAME COLUMN `user_id` TO `manager_id`,
+--   RENAME INDEX `uk_user_sessions_token` TO `uk_manager_sessions_token`,
+--   RENAME INDEX `idx_user_sessions_user_id` TO `idx_manager_sessions_manager_id`,
+--   RENAME INDEX `idx_user_sessions_expires_at` TO `idx_manager_sessions_expires_at`,
+--   ADD CONSTRAINT `fk_manager_sessions_manager_id` FOREIGN KEY (`manager_id`) REFERENCES `managers` (`id`) ON DELETE CASCADE;
+
+-- =====================================================================
+-- 客户账号体系（阶段 1）：customers 增加登录账号与登录审计列
+-- ---------------------------------------------------------------------
+-- 适用范围：仅当数据库已存在 customers 表但缺少 username/avatar/last_login_* 列时使用。
+--          全新安装直接 `mysql < schema.sql` 即可，无需本节。
+-- 使用方法：将下列语句逐行去掉行首 `-- ` 后，在已有库中执行。
+-- 说明：username 唯一索引允许多个 NULL，匿名访客（username 为空）天然兼容、互不冲突。
+-- =====================================================================
+-- ALTER TABLE `customers`
+--   ADD COLUMN `username`      VARCHAR(64)  DEFAULT NULL COMMENT '登录账号，全局唯一；匿名访客为 NULL' AFTER `customer_no`,
+--   ADD COLUMN `avatar`        VARCHAR(500) DEFAULT NULL COMMENT '客户头像 URL；为空时前端展示默认头像' AFTER `email`,
+--   ADD COLUMN `last_login_at` DATETIME     DEFAULT NULL COMMENT '上次登录时间；匿名访客为空' AFTER `updated_at`,
+--   ADD COLUMN `last_login_ip` VARCHAR(64)  DEFAULT NULL COMMENT '上次登录 IP（取 X-Forwarded-For 真实 IP）' AFTER `last_login_at`,
+--   ADD UNIQUE KEY `uk_customers_username` (`username`);

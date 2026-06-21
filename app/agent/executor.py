@@ -59,12 +59,12 @@ class AgentExecutor:
         self.tool_registry = tool_registry
         self.max_rounds = max(1, max_rounds)
 
-    async def run(self, user_id: int, prompt: str) -> AgentRunResult:
+    async def run(self, customer_id: int, prompt: str) -> AgentRunResult:
         """运行一次工具调用循环并返回最终回答。
 
         Args:
-            user_id: 当前用户 ID，用于工具执行时的数据隔离。
-            prompt: 已拼接 RAG 上下文、历史消息和用户问题的客服 Prompt。
+            customer_id: 当前客户 ID，用于工具执行时的数据隔离。
+            prompt: 已拼接 RAG 上下文、历史消息和客户问题的客服 Prompt。
 
         Returns:
             包含最终回答、可见工具结果和执行轨迹的运行结果。
@@ -82,14 +82,14 @@ class AgentExecutor:
 
             messages.append(self._build_assistant_tool_call_message(message, tool_calls))
             for tool_call in tool_calls:
-                tool_message, step = self._execute_tool_call(user_id, round_index, tool_call)
+                tool_message, step = self._execute_tool_call(customer_id, round_index, tool_call)
                 messages.append(tool_message)
                 result.trace.append(step)
                 if step.ok and step.content:
                     result.tool_results.append(step.content)
 
         # 超过最大轮数仍未收敛，去掉工具选项再要一次最终回答，避免无限循环。
-        logger.info("Agent 达到最大工具轮数 %s，强制收敛回答：user_id=%s", self.max_rounds, user_id)
+        logger.info("Agent 达到最大工具轮数 %s，强制收敛回答：customer_id=%s", self.max_rounds, customer_id)
         final_message = await self.llm_client.chat(messages)
         result.answer = str(final_message.get("content") or "")
         return result
@@ -116,14 +116,14 @@ class AgentExecutor:
 
     def _execute_tool_call(
         self,
-        user_id: int,
+        customer_id: int,
         round_index: int,
         tool_call: dict[str, Any],
     ) -> tuple[dict[str, Any], ToolCallStep]:
         """执行模型指定的单次工具调用，构建 tool 消息与执行轨迹。
 
         Args:
-            user_id: 当前用户 ID，用于工具执行时的数据隔离。
+            customer_id: 当前客户 ID，用于工具执行时的数据隔离。
             round_index: 当前工具调用轮数。
             tool_call: 模型返回的单个 tool_call 字典。
 
@@ -135,9 +135,9 @@ class AgentExecutor:
         name = str(function.get("name") or "")
         arguments = self._parse_tool_arguments(function.get("arguments"))
         try:
-            execution = self.tool_registry.execute(user_id, name, arguments)
+            execution = self.tool_registry.execute(customer_id, name, arguments)
         except Exception:
-            logger.warning("执行模型工具调用失败：tool=%s user_id=%s", name, user_id, exc_info=True)
+            logger.warning("执行模型工具调用失败：tool=%s customer_id=%s", name, customer_id, exc_info=True)
             content = "暂时无法完成该业务查询，请用客服口吻说明稍后再试或建议用户补充信息。"
             step = ToolCallStep(round_index=round_index, name=name, arguments=arguments, content=content, ok=False)
             return self._build_tool_message(tool_call_id, content), step

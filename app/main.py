@@ -11,7 +11,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
+from app.api.conversation import router as conversation_router
+from app.api.customer import router as customer_router
+from app.api.customer_auth import router as customer_auth_router
+from app.api.customer_chat import router as customer_chat_router
 from app.api.knowledge_base import router as knowledge_base_router
+from app.api.llm_log import router as llm_log_router
+from app.api.manager import router as manager_router
 from app.api.message import router as message_router
 from app.api.session import router as session_router
 from app.core.config import get_settings
@@ -60,7 +66,13 @@ def create_app() -> FastAPI:
     application.add_exception_handler(Exception, generic_exception_handler)
     application.include_router(auth_router)
     application.include_router(chat_router)
+    application.include_router(conversation_router)
+    application.include_router(customer_router)
+    application.include_router(customer_auth_router)
+    application.include_router(customer_chat_router)
     application.include_router(knowledge_base_router)
+    application.include_router(llm_log_router)
+    application.include_router(manager_router)
     application.include_router(message_router)
     application.include_router(session_router)
 

@@ -68,7 +68,7 @@ async def test_run_without_tool_calls_returns_content() -> None:
     llm = ScriptedLLM([{"role": "assistant", "content": "你好"}])
     executor = AgentExecutor(llm, SimpleToolRegistry([]), max_rounds=3)  # type: ignore[arg-type]
 
-    result = await executor.run(user_id=1, prompt="hi")
+    result = await executor.run(customer_id=1, prompt="hi")
 
     assert result.answer == "你好"
     assert result.rounds == 1
@@ -86,7 +86,7 @@ async def test_run_executes_tool_then_answers() -> None:
     )
     executor = AgentExecutor(llm, SimpleToolRegistry([tool]), max_rounds=3)  # type: ignore[arg-type]
 
-    result = await executor.run(user_id=42, prompt="问题")
+    result = await executor.run(customer_id=42, prompt="问题")
 
     assert result.answer == "最终回答"
     assert result.rounds == 2
@@ -108,7 +108,7 @@ async def test_run_converges_after_max_rounds() -> None:
     )
     executor = AgentExecutor(llm, SimpleToolRegistry([tool]), max_rounds=1)  # type: ignore[arg-type]
 
-    result = await executor.run(user_id=1, prompt="问题")
+    result = await executor.run(customer_id=1, prompt="问题")
 
     assert result.answer == "收敛回答"
     assert result.rounds == 1
@@ -126,7 +126,7 @@ async def test_run_records_failed_tool_in_trace() -> None:
     )
     executor = AgentExecutor(llm, SimpleToolRegistry([BoomTool()]), max_rounds=3)  # type: ignore[arg-type]
 
-    result = await executor.run(user_id=1, prompt="问题")
+    result = await executor.run(customer_id=1, prompt="问题")
 
     assert result.answer == "抱歉，稍后再试"
     assert result.tool_results == []  # 失败结果不进入可见引用
@@ -144,7 +144,7 @@ async def test_run_handles_invalid_json_arguments() -> None:
     )
     executor = AgentExecutor(llm, SimpleToolRegistry([tool]), max_rounds=3)  # type: ignore[arg-type]
 
-    result = await executor.run(user_id=1, prompt="问题")
+    result = await executor.run(customer_id=1, prompt="问题")
 
     assert result.answer == "ok"
     # 非法 JSON 参数被解析为空字典。

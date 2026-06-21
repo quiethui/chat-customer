@@ -5,15 +5,18 @@ from decimal import Decimal
 from typing import Any
 
 from app.repositories.mysql.records import (
-    AuthSessionRecord,
     ChatMessageRecord,
     ChatSessionRecord,
+    CustomerRecord,
+    CustomerSessionRecord,
     KnowledgeBaseRecord,
     KnowledgeChunkRecord,
     KnowledgeFileRecord,
+    LLMRequestLogRecord,
+    ManagerRecord,
+    ManagerSessionRecord,
     OrderRecord,
     ProductRecord,
-    UserRecord,
 )
 
 
@@ -42,13 +45,13 @@ def _optional(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
 
 
-def map_user(row: Any) -> UserRecord:
-    """将用户表记录转换为 UserRecord。
+def map_manager(row: Any) -> ManagerRecord:
+    """将管理员表记录转换为 ManagerRecord。
 
     Args:
-        row: users 表对应的字典行或 ORM 对象。
+        row: managers 表对应的字典行或 ORM 对象。
     """
-    return UserRecord(
+    return ManagerRecord(
         id=int(_field(row, "id")),
         username=str(_field(row, "username")),
         password_hash=str(_field(row, "password_hash")),
@@ -56,18 +59,63 @@ def map_user(row: Any) -> UserRecord:
         nickname=_optional(row, "nickname"),
         avatar=_optional(row, "avatar"),
         status=int(_optional(row, "status", 1)),
+        is_admin=int(_optional(row, "is_admin", 0)),
+        created_at=_optional(row, "created_at"),
+        updated_at=_optional(row, "updated_at"),
+        deleted_at=_optional(row, "deleted_at"),
     )
 
 
-def map_auth_session(row: Any) -> AuthSessionRecord:
-    """将登录会话表记录转换为 AuthSessionRecord。
+def map_manager_session(row: Any) -> ManagerSessionRecord:
+    """将管理员登录会话表记录转换为 ManagerSessionRecord。
 
     Args:
-        row: user_sessions 表对应的字典行或 ORM 对象。
+        row: manager_sessions 表对应的字典行或 ORM 对象。
     """
-    return AuthSessionRecord(
+    return ManagerSessionRecord(
         id=int(_field(row, "id")),
-        user_id=int(_field(row, "user_id")),
+        manager_id=int(_field(row, "manager_id")),
+        token=str(_field(row, "token")),
+        expires_at=_field(row, "expires_at"),
+    )
+
+
+def map_customer(row: Any) -> CustomerRecord:
+    """将客户表记录转换为 CustomerRecord。
+
+    Args:
+        row: customers 表对应的字典行或 ORM 对象。
+    """
+    return CustomerRecord(
+        id=int(_field(row, "id")),
+        customer_no=str(_field(row, "customer_no")),
+        nickname=_optional(row, "nickname"),
+        phone=_optional(row, "phone"),
+        email=_optional(row, "email"),
+        password_hash=_optional(row, "password_hash"),
+        salt=_optional(row, "salt"),
+        source=str(_optional(row, "source", "web")),
+        is_anonymous=int(_optional(row, "is_anonymous", 1)),
+        status=int(_optional(row, "status", 1)),
+        created_at=_optional(row, "created_at"),
+        updated_at=_optional(row, "updated_at"),
+        deleted_at=_optional(row, "deleted_at"),
+        username=_optional(row, "username"),
+        avatar=_optional(row, "avatar"),
+        last_login_at=_optional(row, "last_login_at"),
+        last_login_ip=_optional(row, "last_login_ip"),
+    )
+
+
+def map_customer_session(row: Any) -> CustomerSessionRecord:
+    """将客户登录会话表记录转换为 CustomerSessionRecord。
+
+    Args:
+        row: customer_sessions 表对应的字典行或 ORM 对象。
+    """
+    return CustomerSessionRecord(
+        id=int(_field(row, "id")),
+        customer_id=int(_field(row, "customer_id")),
         token=str(_field(row, "token")),
         expires_at=_field(row, "expires_at"),
     )
@@ -81,12 +129,18 @@ def map_chat_session(row: Any) -> ChatSessionRecord:
     """
     return ChatSessionRecord(
         id=str(_field(row, "id")),
-        user_id=int(_field(row, "user_id")),
+        customer_id=int(_field(row, "customer_id")),
         session_title=str(_field(row, "session_title")),
         session_content=_optional(row, "session_content"),
         remark=_optional(row, "remark"),
         created_at=_field(row, "created_at"),
         updated_at=_field(row, "updated_at"),
+        mode=str(_optional(row, "mode", "bot")),
+        status=str(_optional(row, "status", "bot")),
+        assigned_agent_id=_optional(row, "assigned_agent_id"),
+        last_message_at=_optional(row, "last_message_at"),
+        rating=_optional(row, "rating"),
+        rating_comment=_optional(row, "rating_comment"),
     )
 
 
@@ -99,13 +153,15 @@ def map_chat_message(row: Any) -> ChatMessageRecord:
     return ChatMessageRecord(
         id=int(_field(row, "id")),
         session_id=str(_field(row, "session_id")),
-        user_id=int(_field(row, "user_id")),
+        customer_id=int(_field(row, "customer_id")),
         role=str(_field(row, "role")),
         content=str(_field(row, "content")),
         model_name=_optional(row, "model_name"),
         total_tokens=int(_optional(row, "total_tokens", 0)),
         references_text=_optional(row, "references_text"),
         created_at=_field(row, "created_at"),
+        sender_type=str(_optional(row, "sender_type", "customer")),
+        agent_id=_optional(row, "agent_id"),
     )
 
 
@@ -117,7 +173,7 @@ def map_order(row: Any) -> OrderRecord:
     """
     return OrderRecord(
         id=int(_field(row, "id")),
-        user_id=int(_field(row, "user_id")),
+        customer_id=int(_field(row, "customer_id")),
         order_no=str(_field(row, "order_no")),
         product_name=str(_field(row, "product_name")),
         product_quantity=int(_optional(row, "product_quantity", 1)),
@@ -196,5 +252,27 @@ def map_knowledge_chunk(row: Any) -> KnowledgeChunkRecord:
         chunk_index=int(_field(row, "chunk_index")),
         content=str(_field(row, "content")),
         vector_id=str(_field(row, "vector_id")),
+        created_at=_field(row, "created_at"),
+    )
+
+
+def map_llm_request_log(row: Any) -> LLMRequestLogRecord:
+    """将大模型请求日志表记录转换为 LLMRequestLogRecord。
+
+    Args:
+        row: llm_request_logs 表对应的字典行或 ORM 对象。
+    """
+    return LLMRequestLogRecord(
+        id=int(_field(row, "id")),
+        model=str(_field(row, "model")),
+        base_url=_optional(row, "base_url"),
+        request_payload=str(_field(row, "request_payload")),
+        response_payload=_optional(row, "response_payload"),
+        prompt_tokens=_optional(row, "prompt_tokens"),
+        completion_tokens=_optional(row, "completion_tokens"),
+        total_tokens=_optional(row, "total_tokens"),
+        latency_ms=_optional(row, "latency_ms"),
+        status=str(_optional(row, "status", "success")),
+        error_message=_optional(row, "error_message"),
         created_at=_field(row, "created_at"),
     )

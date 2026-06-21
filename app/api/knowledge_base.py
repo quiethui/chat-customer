@@ -11,7 +11,7 @@ from app.core.config import Settings
 from app.core.response import success_response
 from app.dependencies import (
     get_app_settings,
-    get_current_user,
+    get_current_manager,
     get_knowledge_base_service,
     process_knowledge_file_background,
 )
@@ -20,7 +20,7 @@ from app.schemas.knowledge_base import KnowledgeBaseCreateRequest
 from app.services.knowledge_base_service import KnowledgeBaseService
 from app.utils.files import save_supported_upload_file
 
-router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"], dependencies=[Depends(get_current_manager)])
 
 
 @router.post("")

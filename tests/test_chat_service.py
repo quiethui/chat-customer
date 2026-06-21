@@ -107,7 +107,7 @@ async def test_answer_fallback_path_persists_and_caches() -> None:
     results = [RetrievalResult(text="退货请在7天内申请。", score=1.0, metadata={})]
     service, mysql, context = _service(llm, results)
 
-    result = await service.answer("怎么退货", user_id=1)
+    result = await service.answer("怎么退货", customer_id=1)
 
     assert result.answer == "兜底回答"
     assert result.session_id  # 自动创建了会话
@@ -126,7 +126,7 @@ async def test_answer_function_calling_path_returns_model_content() -> None:
     results = [RetrievalResult(text="参考资料。", score=1.0, metadata={})]
     service, mysql, _ = _service(llm, results)
 
-    result = await service.answer("你好", user_id=1)
+    result = await service.answer("你好", customer_id=1)
 
     assert result.answer == "您好，已为您处理。"
     assert not llm.answer_calls  # 未走兜底
@@ -136,7 +136,7 @@ async def test_answer_function_calling_path_returns_model_content() -> None:
 async def test_answer_reuses_existing_session_id() -> None:
     llm = FakeLLMClient(enabled=True, chat_message={"role": "assistant", "content": "ok"})
     service, mysql, _ = _service(llm, [])
-    result = await service.answer("问题", user_id=1, session_id="existing-session")
+    result = await service.answer("问题", customer_id=1, session_id="existing-session")
     assert result.session_id == "existing-session"
     assert mysql.created_sessions == []  # 不重复创建会话
 
@@ -147,7 +147,7 @@ async def test_answer_rag_test_mode_skips_model() -> None:
     results = [RetrievalResult(text="片段", score=0.9, metadata={})]
     service, mysql, _ = _service(llm, results)
 
-    result = await service.answer("问题", user_id=1, rag_test=True)
+    result = await service.answer("问题", customer_id=1, rag_test=True)
 
     assert result.rag_test is True
     assert result.rag_debug is not None

@@ -14,14 +14,20 @@ from app.db.session import create_session_factory
 from app.llm.openai_client import OpenAIClient
 from app.rag.embedding import HashEmbedding, create_embedding
 from app.repositories.context_repository import ContextRepository, RedisContextRepository
-from app.repositories.mysql.records import UserRecord
+from app.repositories.conversation_bus import ConversationBus
+from app.repositories.mysql.records import CustomerRecord, ManagerRecord
 from app.repositories.mysql_repository import MySQLRepository
 from app.repositories.vector import VectorRepository, create_vector_repository
 from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
+from app.services.conversation_service import ConversationService
+from app.services.customer_auth_service import CustomerAuthService
+from app.services.customer_service import CustomerService
 from app.services.knowledge_base_service import KnowledgeBaseService
+from app.services.llm_log_service import LLMLogService
 from app.services.message_service import MessageService
 from app.services.session_service import SessionService
+from app.services.manager_service import ManagerService
 from app.tools.order_tool import OrderQueryTool
 from app.tools.product_tool import ProductQueryTool
 from app.tools.registry import SimpleToolRegistry
@@ -96,6 +102,12 @@ def get_vector_repository() -> VectorRepository:
 def get_context_repository() -> ContextRepository:
     """返回 Redis 上下文仓储。"""
     return RedisContextRepository(get_app_settings())
+
+
+@lru_cache(maxsize=1)
+def get_conversation_bus() -> ConversationBus:
+    """返回会话事件总线（Redis Pub/Sub），用于坐席消息向客户 SSE 实时推送。"""
+    return ConversationBus(get_app_settings())
 
 
 @lru_cache(maxsize=1)
@@ -259,14 +271,144 @@ def get_bearer_token(request: Request) -> str:
     return token.strip()
 
 
-def get_current_user(token: str = Depends(get_bearer_token), service: AuthService = Depends(get_auth_service)) -> UserRecord:
-    """返回当前登录用户。
+def get_current_manager(token: str = Depends(get_bearer_token), service: AuthService = Depends(get_auth_service)) -> ManagerRecord:
+    """返回当前登录管理员。
 
     Args:
         token: 认证访问令牌。
         service: 当前接口注入的业务服务实例。
     """
-    user = service.authenticate_token(token)
-    if not user:
+    manager = service.authenticate_token(token)
+    if not manager:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录已过期，请重新登录")
-    return user
+    return manager
+
+
+def get_customer_auth_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> CustomerAuthService:
+    """返回客户认证服务（对外 AI 客服客户端）。
+
+    Args:
+        repository: 当前请求使用的 MySQL 仓储实例。
+    """
+    settings = get_app_settings()
+    return CustomerAuthService(repository, settings.auth_session_ttl_minutes)
+
+
+def get_current_customer(
+    token: str = Depends(get_bearer_token),
+    service: CustomerAuthService = Depends(get_customer_auth_service),
+) -> CustomerRecord:
+    """返回当前客户端登录的客户。
+
+    Args:
+        token: 客户端认证访问令牌。
+        service: 当前接口注入的客户认证服务实例。
+    """
+    customer = service.authenticate_token(token)
+    if not customer:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="客户身份已失效，请重新进入")
+    return customer
+
+
+def get_optional_bearer_token(request: Request) -> str | None:
+    """解析可选的 Bearer token；缺失或格式非法时返回 None。
+
+    注册、登录需兼容「匿名携 token」与「未携 token」两种来访，故不抛异常。
+
+    Args:
+        request: 当前接口接收的请求对象。
+    """
+    authorization = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def get_optional_customer(
+    token: str | None = Depends(get_optional_bearer_token),
+    service: CustomerAuthService = Depends(get_customer_auth_service),
+) -> CustomerRecord | None:
+    """返回当前客户端登录的客户；无 token 或 token 失效时返回 None。
+
+    Args:
+        token: 可选的客户端认证访问令牌。
+        service: 当前接口注入的客户认证服务实例。
+    """
+    if not token:
+        return None
+    return service.authenticate_token(token)
+
+
+def get_client_ip(request: Request) -> str | None:
+    """提取客户端真实 IP：优先取 X-Forwarded-For 首段，回退 socket 地址。
+
+    Args:
+        request: 当前接口接收的请求对象。
+    """
+    forwarded = request.headers.get("X-Forwarded-For") or request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else None
+
+
+def get_manager_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> ManagerService:
+    """返回管理员管理服务。
+
+    Args:
+        repository: 当前请求使用的 MySQL 仓储实例。
+    """
+    return ManagerService(repository)
+
+
+def get_customer_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> CustomerService:
+    """返回后台客户管理服务。
+
+    Args:
+        repository: 当前请求使用的 MySQL 仓储实例。
+    """
+    return CustomerService(repository)
+
+
+def get_llm_log_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> LLMLogService:
+    """返回大模型请求日志服务。
+
+    Args:
+        repository: 当前请求使用的 MySQL 仓储实例。
+    """
+    return LLMLogService(repository)
+
+
+def get_current_admin_manager(manager: ManagerRecord = Depends(get_current_manager)) -> ManagerRecord:
+    """返回当前登录的管理员，非管理员抛 403。
+
+    Args:
+        manager: 当前登录管理员记录。
+    """
+    if not manager.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    return manager
+
+
+def get_current_agent_manager(manager: ManagerRecord = Depends(get_current_manager)) -> ManagerRecord:
+    """返回当前登录的坐席员工。
+
+    所有登录员工均可作为坐席使用工作台。
+
+    Args:
+        manager: 当前登录管理员记录。
+    """
+    return manager
+
+
+def get_conversation_service(repository: MySQLRepository = Depends(get_mysql_repository)) -> ConversationService:
+    """返回转人工与坐席会话编排服务。
+
+    Args:
+        repository: 当前请求使用的 MySQL 仓储实例。
+    """
+    return ConversationService(repository, get_conversation_bus())

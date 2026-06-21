@@ -8,13 +8,11 @@ app/uploads/*
 milvus_demo.db/
 web/node_modules/
 web/dist/
+volumes/
 alembic.ini
+examples/
+docs/
 
-# 本地调试脚本与产物（不纳入版本库；正式测试在 tests/）
-/test.py
-/test_rag.ipynb
-/test_rag_flow*.py
-rag_bge_milvus_lite.db/
 
 # Claude Code 技能锁文件（非项目内容）
 skills-lock.json

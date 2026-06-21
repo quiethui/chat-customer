@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 import logging
 from time import perf_counter
+from typing import Any
 from uuid import uuid4
 
 from app.agent import AgentExecutor
-from app.llm.openai_client import OpenAIClient
+from app.llm.openai_client import OpenAIClient, split_for_stream
 from app.rag.embedding import HashEmbedding
 from app.rag.prompt import build_customer_prompt
 from app.rag.selection import build_references, select_prompt_contexts
@@ -84,7 +86,7 @@ class ChatService:
     async def answer(
         self,
         question: str,
-        user_id: int,
+        customer_id: int,
         session_id: str | None = None,
         rag_test: bool = False,
         knowledge_base_ids: list[int] | None = None,
@@ -93,8 +95,8 @@ class ChatService:
         """基于问题检索知识库、调用业务工具、读取上下文并生成答案。
 
         Args:
-            question: 用户本轮输入的问题。
-            user_id: 当前登录用户 ID，用于会话、消息和业务数据隔离。
+            question: 客户本轮输入的问题。
+            customer_id: 当前客户 ID，用于会话、消息和业务数据隔离。
             session_id: 可选聊天会话 ID；为空时自动创建新会话。
             rag_test: 是否开启 RAG 测试模式；开启后只返回检索结果和 Prompt。
             knowledge_base_ids: 可选知识库过滤 ID 列表。
@@ -104,9 +106,9 @@ class ChatService:
             包含回答、参考片段、会话 ID 和最终 Prompt 的回答结果。
         """
         # 没有会话 ID 时创建新会话，返回本轮使用的 session_id。
-        session_id = session_id or self._create_session(user_id, question)
+        session_id = session_id or self._create_session(customer_id, question)
         # 读取最近聊天上下文，返回可放入 Prompt 的历史消息列表。
-        history = self._get_history(user_id, session_id)
+        history = self._get_history(customer_id, session_id)
 
         # RAG 检索：问题向量化 -> 向量检索 -> 精选上下文。
         start_time = perf_counter()
@@ -114,17 +116,76 @@ class ChatService:
         if rag_test:
             return self._build_rag_test_result(question, contexts, history, results, search_limit, start_time, session_id)
 
-        # 用户消息先落库，确保即使后续模型调用失败也能保留用户输入。
-        self.mysql_repository.add_chat_message(session_id, user_id, "user", question)
+        # 客户消息先落库，确保即使后续模型调用失败也能保留客户输入。
+        self.mysql_repository.add_chat_message(session_id, customer_id, "user", question, sender_type="customer")
         self.mysql_repository.commit()
 
         # 远程模型走 Function Calling，本地 fallback 走关键词触发，各自返回真正提交给模型的 Prompt。
-        answer, tool_results, prompt = await self._generate(user_id, question, contexts, history)
+        answer, tool_results, prompt = await self._generate(customer_id, question, contexts, history)
         # 生成回答依据：业务工具结果优先，其后接知识库引用。
         references = self._build_references(question, contexts, tool_results)
         # 保存助手回复及引用，并把本轮问答写入 Redis 上下文，供下一轮对话使用。
-        self._persist_and_cache(user_id, session_id, question, answer, references)
+        self._persist_and_cache(customer_id, session_id, question, answer, references)
         return AnswerResult(answer=answer, references=references, session_id=session_id, prompt=prompt)
+
+    async def answer_stream(
+        self,
+        question: str,
+        customer_id: int,
+        session_id: str | None = None,
+        knowledge_base_ids: list[int] | None = None,
+        file_ids: list[int] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """流式回答：工具轮在服务端跑，最终回答逐段下发。
+
+        事件序列：先 `status`（提示进度），再若干 `delta`（逐段回答），最后 `done`
+        （携带 references 与 session_id）。工具调用与持久化均在服务端完成，客户端只消费回答增量。
+
+        Args:
+            question: 客户本轮输入的问题。
+            customer_id: 当前客户 ID，用于会话、消息和业务数据隔离。
+            session_id: 可选聊天会话 ID；为空时自动创建新会话。
+            knowledge_base_ids: 可选知识库过滤 ID 列表。
+            file_ids: 可选文件过滤 ID 列表。
+
+        Yields:
+            SSE 事件字典，包含 type 及对应字段（message / text / references / session_id）。
+        """
+        session_id = session_id or self._create_session(customer_id, question)
+        history = self._get_history(customer_id, session_id)
+        _, contexts, _ = self._retrieve(question, knowledge_base_ids, file_ids)
+
+        # 客户消息先落库并提交，确保即使后续模型调用失败也能保留客户输入。
+        self.mysql_repository.add_chat_message(session_id, customer_id, "user", question, sender_type="customer")
+        self.mysql_repository.commit()
+        yield {"type": "status", "message": "正在思考…", "session_id": session_id}
+
+        if self.llm_client.enabled:
+            # 远程模型路径：交给 AgentExecutor 在服务端跑完工具轮，再把最终回答逐段下发。
+            prompt = build_customer_prompt(question, contexts, history, None)
+            run_result = await self.agent_executor.run(customer_id, prompt)
+            tool_results = run_result.tool_results
+            if tool_results:
+                yield {"type": "status", "message": "已为您查询到相关业务信息", "session_id": session_id}
+            answer = run_result.answer
+            for piece in split_for_stream(answer):
+                yield {"type": "delta", "text": piece}
+        else:
+            # 本地 fallback：关键词触发工具后，用 stream_answer 逐段产出兜底回答。
+            tool_results = [item.content for item in self.tool_registry.call(customer_id, question)]
+            if tool_results:
+                yield {"type": "status", "message": "已为您查询到相关业务信息", "session_id": session_id}
+            prompt = build_customer_prompt(question, contexts, history, tool_results)
+            collected: list[str] = []
+            async for piece in self.llm_client.stream_answer(prompt):
+                collected.append(piece)
+                yield {"type": "delta", "text": piece}
+            answer = "".join(collected)
+
+        references = self._build_references(question, contexts, tool_results)
+        self._persist_and_cache(customer_id, session_id, question, answer, references)
+        self.mysql_repository.commit()
+        yield {"type": "done", "references": references, "session_id": session_id}
 
     def _retrieve(
         self,
@@ -135,14 +196,14 @@ class ChatService:
         """向量化问题并检索知识库，返回候选结果、精选上下文和本次候选数量。
 
         Args:
-            question: 用户本轮输入的问题。
+            question: 客户本轮输入的问题。
             knowledge_base_ids: 可选知识库过滤 ID 列表。
             file_ids: 可选文件过滤 ID 列表。
 
         Returns:
             向量检索候选结果、精选进入 Prompt 的上下文，以及本次检索候选数量。
         """
-        # 将用户问题转成向量，供向量库相似度检索使用。
+        # 将客户问题转成向量，供向量库相似度检索使用。
         query_vector = self.embedding.embed(question)
         search_limit = max(self.top_k, min(self.top_k * _SEARCH_POOL_MULTIPLIER, _SEARCH_POOL_MAX))
         # 默认只检索 active 文件，避免 failed/deleted/processing 的残留向量进入回答。
@@ -169,7 +230,7 @@ class ChatService:
         """组装 RAG 测试模式响应：只返回检索结果和 Prompt，不调用模型。
 
         Args:
-            question: 用户本轮输入的问题。
+            question: 客户本轮输入的问题。
             contexts: 精选进入 Prompt 的上下文片段。
             history: 当前会话的最近历史消息。
             results: 向量检索返回的候选结果列表。
@@ -196,7 +257,7 @@ class ChatService:
 
     async def _generate(
         self,
-        user_id: int,
+        customer_id: int,
         question: str,
         contexts: list[str],
         history: list[dict[str, str]],
@@ -204,8 +265,8 @@ class ChatService:
         """按模型可用性生成回答，返回回答、可见工具结果和真正提交给模型的 Prompt。
 
         Args:
-            user_id: 当前用户 ID，用于工具执行时的数据隔离。
-            question: 用户本轮输入的问题。
+            customer_id: 当前客户 ID，用于工具执行时的数据隔离。
+            question: 客户本轮输入的问题。
             contexts: 精选进入 Prompt 的上下文片段。
             history: 当前会话的最近历史消息。
 
@@ -217,17 +278,17 @@ class ChatService:
             # 决定是否调用工具，工具结果通过独立 tool 消息回传，因此首轮 Prompt 即为真正
             # 提交给模型的内容。
             prompt = build_customer_prompt(question, contexts, history, None)
-            run_result = await self.agent_executor.run(user_id, prompt)
+            run_result = await self.agent_executor.run(customer_id, prompt)
             if run_result.trace:
                 logger.info(
-                    "Agent 工具调用完成：user_id=%s rounds=%s tools=%s",
-                    user_id,
+                    "Agent 工具调用完成：customer_id=%s rounds=%s tools=%s",
+                    customer_id,
                     run_result.rounds,
                     [step.name for step in run_result.trace],
                 )
             return run_result.answer, run_result.tool_results, prompt
         # 本地 fallback 没有模型工具选择能力，只保留旧的关键词触发以便离线演示可用。
-        tool_results = [item.content for item in self.tool_registry.call(user_id, question)]
+        tool_results = [item.content for item in self.tool_registry.call(customer_id, question)]
         prompt = build_customer_prompt(question, contexts, history, tool_results)
         answer = await self.llm_client.answer(prompt)
         return answer, tool_results, prompt
@@ -236,7 +297,7 @@ class ChatService:
         """生成回答依据列表：业务工具结果优先展示，其后接知识库引用。
 
         Args:
-            question: 用户本轮输入的问题。
+            question: 客户本轮输入的问题。
             contexts: 精选进入 Prompt 的上下文片段。
             tool_results: 本轮成功执行的可见工具结果文本列表。
 
@@ -250,7 +311,7 @@ class ChatService:
 
     def _persist_and_cache(
         self,
-        user_id: int,
+        customer_id: int,
         session_id: str,
         question: str,
         answer: str,
@@ -259,18 +320,18 @@ class ChatService:
         """保存助手回复并将本轮问答写入 Redis 上下文缓存。
 
         Args:
-            user_id: 当前用户 ID，用于数据隔离。
+            customer_id: 当前客户 ID，用于数据隔离。
             session_id: 本轮问答所属会话 ID。
-            question: 用户本轮输入的问题。
+            question: 客户本轮输入的问题。
             answer: 本轮生成的客服回答。
             references: 本轮回答的引用依据列表。
         """
-        # 保存助手回复及引用，便于后续查看会话记录。
+        # 保存助手回复及引用（发送方为机器人），便于后续查看会话记录。
         self.mysql_repository.add_chat_message(
-            session_id, user_id, "assistant", answer, self.llm_client.model, references=references,
+            session_id, customer_id, "assistant", answer, self.llm_client.model, references=references, sender_type="bot",
         )
         # 将本轮问答追加到 Redis 上下文，供下一轮对话使用。
-        self._append_context(user_id, session_id, question, answer)
+        self._append_context(customer_id, session_id, question, answer)
 
     def _get_knowledge_base_name(self, knowledge_base_id: str | None, cache: dict[str, str]) -> str | None:
         """根据知识库 ID 查询知识库名称，并使用本次请求内缓存减少数据库查询。
@@ -292,59 +353,59 @@ class ChatService:
         cache[knowledge_base_id] = record.name
         return record.name
 
-    def _create_session(self, user_id: int, question: str) -> str:
+    def _create_session(self, customer_id: int, question: str) -> str:
         """为未指定会话的提问自动创建会话。
 
         Args:
-            user_id: 当前用户 ID，用于数据隔离。
-            question: 用户输入的问题文本。
+            customer_id: 当前客户 ID，用于数据隔离。
+            question: 客户输入的问题文本。
         """
         session_id = uuid4().hex
         title = question.strip()[:120] or "新对话"
-        self.mysql_repository.create_chat_session(session_id, user_id, title, question, question[:120])
+        self.mysql_repository.create_chat_session(session_id, customer_id, title, question, question[:120])
         return session_id
 
-    def _get_history(self, user_id: int, session_id: str) -> list[dict[str, str]]:
+    def _get_history(self, customer_id: int, session_id: str) -> list[dict[str, str]]:
         """优先从 Redis 读取历史上下文，缓存缺失时回源 MySQL。
 
         Args:
-            user_id: 当前用户 ID，用于数据隔离。
+            customer_id: 当前客户 ID，用于数据隔离。
             session_id: 聊天会话 ID。
         """
         try:
-            cached_messages = self.context_repository.get_messages(user_id, session_id)
+            cached_messages = self.context_repository.get_messages(customer_id, session_id)
         except Exception:
-            logger.warning("读取 Redis 聊天上下文失败：user_id=%s session_id=%s", user_id, session_id, exc_info=True)
+            logger.warning("读取 Redis 聊天上下文失败：customer_id=%s session_id=%s", customer_id, session_id, exc_info=True)
             cached_messages = []
         if cached_messages:
             return cached_messages
 
-        db_messages = self.mysql_repository.list_recent_messages(user_id, session_id, 10)
+        db_messages = self.mysql_repository.list_recent_messages(customer_id, session_id, 10)
         messages = [
             {"role": item.role, "content": item.content}
             for item in db_messages
             if item.role in {"user", "assistant"}
         ]
         try:
-            self.context_repository.replace_messages(user_id, session_id, messages)
+            self.context_repository.replace_messages(customer_id, session_id, messages)
         except Exception:
-            logger.warning("回填 Redis 聊天上下文失败：user_id=%s session_id=%s", user_id, session_id, exc_info=True)
+            logger.warning("回填 Redis 聊天上下文失败：customer_id=%s session_id=%s", customer_id, session_id, exc_info=True)
         return messages
 
-    def _append_context(self, user_id: int, session_id: str, question: str, answer: str) -> None:
+    def _append_context(self, customer_id: int, session_id: str, question: str, answer: str) -> None:
         """将本轮问答追加到 Redis 上下文缓存。
 
         Args:
-            user_id: 当前用户 ID，用于数据隔离。
+            customer_id: 当前客户 ID，用于数据隔离。
             session_id: 聊天会话 ID。
-            question: 用户输入的问题文本。
+            question: 客户输入的问题文本。
             answer: 本轮生成的客服回答。
         """
         try:
             self.context_repository.append_messages(
-                user_id,
+                customer_id,
                 session_id,
                 [{"role": "user", "content": question}, {"role": "assistant", "content": answer}],
             )
         except Exception:
-            logger.warning("追加 Redis 聊天上下文失败：user_id=%s session_id=%s", user_id, session_id, exc_info=True)
+            logger.warning("追加 Redis 聊天上下文失败：customer_id=%s session_id=%s", customer_id, session_id, exc_info=True)

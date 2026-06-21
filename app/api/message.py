@@ -5,8 +5,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.core.response import success_response
-from app.dependencies import get_current_user, get_message_service
-from app.repositories.mysql.records import ChatMessageRecord, UserRecord
+from app.dependencies import get_current_manager, get_message_service
+from app.repositories.mysql.records import ChatMessageRecord, ManagerRecord
 from app.schemas.message import ChatMessageResponse
 from app.services.message_service import MessageService
 
@@ -16,17 +16,17 @@ router = APIRouter(prefix="/system/message", tags=["message"])
 @router.get("/list")
 def list_messages(
     sessionId: str = Query(..., min_length=1),
-    user: UserRecord = Depends(get_current_user),
+    manager: ManagerRecord = Depends(get_current_manager),
     service: MessageService = Depends(get_message_service),
 ) -> dict[str, Any]:
     """按会话 ID 查询当前用户可见的聊天消息列表。
 
     Args:
         sessionId: 前端传入的聊天会话 ID。
-        user: 当前登录用户记录。
+        manager: 当前登录管理员记录。
         service: 当前接口注入的消息服务实例。
     """
-    messages = service.list_messages(user.id, sessionId)
+    messages = service.list_messages(manager.id, sessionId)
     return success_response(data=[_to_response(item).model_dump() for item in messages], message="获取成功")
 
 
@@ -39,7 +39,7 @@ def _to_response(message: ChatMessageRecord) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=message.id,
         sessionId=message.session_id,
-        userId=message.user_id,
+        userId=message.customer_id,
         role=message.role,
         content=message.content,
         modelName=message.model_name,

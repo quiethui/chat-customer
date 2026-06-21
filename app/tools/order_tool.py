@@ -101,11 +101,11 @@ class OrderQueryTool:
         has_weak_intent = any(keyword in normalized_question for keyword in ORDER_WEAK_INTENT_KEYWORDS)
         return has_weak_intent and any(keyword in normalized_question for keyword in ("这单", "该订单", "订单"))
 
-    def call(self, user_id: int, arguments: dict[str, Any]) -> ToolExecution:
-        """查询当前用户订单并格式化为大模型可读文本。
+    def call(self, customer_id: int, arguments: dict[str, Any]) -> ToolExecution:
+        """查询当前客户订单并格式化为大模型可读文本。
 
         Args:
-            user_id: 当前登录用户 ID，作为订单查询的强制过滤条件。
+            customer_id: 当前客户 ID，作为订单查询的强制过滤条件。
             arguments: 模型通过 Function Calling 生成的结构化查询参数。
 
         Returns:
@@ -113,24 +113,24 @@ class OrderQueryTool:
         """
         order_no = self._normalize_order_no(arguments.get("order_no"))
         limit = self._normalize_limit(arguments.get("limit"))
-        orders = self.mysql_repository.list_user_orders(user_id=user_id, order_no=order_no, limit=limit)
+        orders = self.mysql_repository.list_user_orders(customer_id=customer_id, order_no=order_no, limit=limit)
         if not orders:
             content = self._build_empty_result(order_no)
         else:
             content = self._build_order_result(orders, order_no)
         return ToolExecution(name=self.name, content=content)
 
-    def call_from_question(self, user_id: int, question: str) -> ToolExecution:
+    def call_from_question(self, customer_id: int, question: str) -> ToolExecution:
         """从问题文本中提取订单号并查询订单，用于本地 fallback。
 
         Args:
-            user_id: 当前登录用户 ID，作为订单查询的强制过滤条件。
-            question: 用户本轮问题，用于提取订单号。
+            customer_id: 当前客户 ID，作为订单查询的强制过滤条件。
+            question: 客户本轮问题，用于提取订单号。
 
         Returns:
             ToolExecution，content 中包含订单查询结果或未命中提示。
         """
-        return self.call(user_id, {"order_no": self._extract_order_no(question), "limit": self.limit})
+        return self.call(customer_id, {"order_no": self._extract_order_no(question), "limit": self.limit})
 
     def _extract_order_no(self, question: str) -> str | None:
         """从用户问题中提取订单号。

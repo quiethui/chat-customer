@@ -14,8 +14,8 @@ class FakeOrderRepository:
         self._orders = orders
         self.last_call: dict | None = None
 
-    def list_user_orders(self, user_id: int, order_no: str | None = None, limit: int = 5) -> list[OrderRecord]:
-        self.last_call = {"user_id": user_id, "order_no": order_no, "limit": limit}
+    def list_user_orders(self, customer_id: int, order_no: str | None = None, limit: int = 5) -> list[OrderRecord]:
+        self.last_call = {"customer_id": customer_id, "order_no": order_no, "limit": limit}
         if order_no:
             return [order for order in self._orders if order.order_no == order_no]
         return self._orders[:limit]
@@ -25,7 +25,7 @@ def _order(order_no: str = "OD20260528001") -> OrderRecord:
     now = datetime(2026, 5, 28, 10, 0, 0)
     return OrderRecord(
         id=1,
-        user_id=42,
+        customer_id=42,
         order_no=order_no,
         product_name="无线耳机",
         product_quantity=1,
@@ -62,7 +62,7 @@ def test_can_handle_irrelevant_question() -> None:
 
 def test_call_formats_hit_order() -> None:
     tool = _tool([_order()])
-    execution = tool.call(user_id=42, arguments={"order_no": "OD20260528001"})
+    execution = tool.call(customer_id=42, arguments={"order_no": "OD20260528001"})
     assert execution.name == "query_user_orders"
     assert "OD20260528001" in execution.content
     assert "已发货" in execution.content  # 状态编码被翻译成中文
@@ -71,15 +71,15 @@ def test_call_formats_hit_order() -> None:
 
 def test_call_empty_result_message() -> None:
     tool = _tool([])
-    execution = tool.call(user_id=42, arguments={"order_no": "OD20260528999"})
+    execution = tool.call(customer_id=42, arguments={"order_no": "OD20260528999"})
     assert "未查询到" in execution.content
 
 
 def test_call_enforces_user_isolation_and_limit() -> None:
     repo = FakeOrderRepository([_order()])
     tool = OrderQueryTool(repo)  # type: ignore[arg-type]
-    tool.call(user_id=7, arguments={"limit": 99})
+    tool.call(customer_id=7, arguments={"limit": 99})
     assert repo.last_call is not None
-    assert repo.last_call["user_id"] == 7
+    assert repo.last_call["customer_id"] == 7
     # limit 被规范化到工具默认上限 5 以内。
     assert repo.last_call["limit"] <= 5
