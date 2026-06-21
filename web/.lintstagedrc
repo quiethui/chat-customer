@@ -1,14 +1,8 @@
 {
-  "*.{ts,tsx}": [
-    "eslint --fix",
-    "git add"
+  "**/*.{js,jsx,tsx,ts,css,less}": [
+    "npx @biomejs/biome check --write"
   ],
-  "*.{json,js,jsx}": [
-    "eslint --fix",
-    "git add"
-  ],
-  "*.vue": [
-    "eslint --fix",
-    "git add"
+  "src/**/*.md": [
+    "npx @biomejs/biome check --write"
   ]
 }

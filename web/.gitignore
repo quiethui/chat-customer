@@ -1,25 +1,54 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-node_modules
-dist
-dist-ssr
-*.local
+# dependencies
+**/node_modules
+# roadhog-api-doc ignore
+/src/utils/request-temp.js
+_roadhog-api-doc
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-.idea
+# production
+/dist
+
+# misc
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+npm-debug.log*
+yarn-error.log
+
+/coverage
+.idea
+yarn.lock
+*bak
+.vscode
+
+
+# visual studio code
+.history
+*.log
+functions/*
+.temp/**
+
+# claude code local settings
+.claude/settings.local.json
+
+# umi
+.umi
+.umi-production
+.umi-test
+.umi-undefined
+.turbopack
+
+# screenshot
+screenshot
+.firebase
+
+build
+
+# worktrees
+.worktrees
+
+# superpowers docs
+docs/superpowers
+
+# cloudflare wrangler
+.wrangler
+requestRecord.mock.js

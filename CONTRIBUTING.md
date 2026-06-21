@@ -5,7 +5,7 @@
 ## 环境要求
 
 - Python 3.11+ 与 [uv](https://github.com/astral-sh/uv)
-- Node.js 18+ 与 [pnpm](https://pnpm.io/)
+- Node.js 18+ 与 npm
 - MySQL 8.x、Redis（向量库本地开发可用内存模式）
 
 ## 本地开发
@@ -19,12 +19,20 @@ mysql -u root -p < schema.sql    # 初始化表结构与演示数据
 uv run uvicorn app.main:app --reload
 ```
 
-### 前端
+### 管理端前端（web/）
 
 ```bash
 cd web
-pnpm install
-pnpm dev
+npm install
+npm run dev      # http://127.0.0.1:8001
+```
+
+### 客户端挂件（widget/）
+
+```bash
+cd widget
+npm install
+npm run dev      # http://127.0.0.1:5173
 ```
 
 ## 运行测试
@@ -36,6 +44,14 @@ uv run pytest
 ```
 
 新增功能或修复缺陷时，请同步补充 `tests/` 下的测试。
+
+## 代码规范
+
+- **后端**：所有函数必须有类型注解与 docstring（中文），遵循严格分层（路由 → 业务 → 数据）
+- **管理端前端**：使用 Biome 检查，运行 `npm run lint` 确保通过
+- **客户端挂件**：保持轻量，避免引入重型依赖
+
+完整规范见 [AGENTS.md](AGENTS.md)。
 
 ## 提交规范
 
@@ -50,4 +66,4 @@ uv run pytest
 
 ## License
 
-提交即表示你同意贡献内容以 [MIT](web/LICENSE) 协议授权。
+提交即表示你同意贡献内容以 [MIT](LICENSE) 协议授权。
