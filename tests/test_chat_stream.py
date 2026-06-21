@@ -142,3 +142,41 @@ async def test_answer_stream_reuses_existing_session() -> None:
 
     assert mysql.created_sessions == []
     assert events[-1]["session_id"] == "sess-1"
+
+
+class FakeVectorRepositoryWithError:
+    """模拟向量数据库服务异常的假仓储。"""
+
+    def search(self, vector: list[float], top_k: int, filters: Any = None) -> list[RetrievalResult]:
+        raise RuntimeError("向量数据库连接失败")
+
+
+async def test_answer_stream_handles_vector_db_failure() -> None:
+    """向量数据库服务异常时不中断流式服务，继续用历史上下文和工具回答。"""
+    llm = FakeLLMClient(enabled=True)
+    mysql = FakeMySQLRepository()
+    context = FakeContextRepository()
+    registry = SimpleToolRegistry([])
+    service = ChatService(
+        embedding=FakeEmbedding(),  # type: ignore[arg-type]
+        repository=FakeVectorRepositoryWithError(),  # type: ignore[arg-type]
+        llm_client=llm,  # type: ignore[arg-type]
+        top_k=4,
+        reference_limit=3,
+        reference_max_chars=240,
+        mysql_repository=mysql,  # type: ignore[arg-type]
+        context_repository=context,  # type: ignore[arg-type]
+        tool_registry=registry,
+        agent_executor=AgentExecutor(llm, registry, max_rounds=3),  # type: ignore[arg-type]
+    )
+
+    events = await _collect(service.answer_stream("你好", customer_id=1))
+
+    types = [event["type"] for event in events]
+    assert types[0] == "status"
+    assert types[-1] == "done"
+    assert "delta" in types
+    answer = "".join(event["text"] for event in events if event["type"] == "delta")
+    assert answer == "您好，已为您处理。"
+    assert events[-1]["references"] == []  # 向量检索失败，无知识库引用
+    assert [m["role"] for m in mysql.messages] == ["user", "assistant"]

@@ -17,6 +17,7 @@ class ConversationQueueItem(BaseModel):
     status: str = Field(..., description="会话状态：bot/waiting/serving/closed。")
     mode: str = Field(..., description="服务模式：bot/agent。")
     assigned_agent_id: int | None = Field(default=None, alias="assignedAgentId", description="接管坐席用户 ID。")
+    assigned_agent_name: str | None = Field(default=None, alias="assignedAgentName", description="接管坐席昵称。")
     last_message_at: datetime | None = Field(default=None, alias="lastMessageAt", description="最近活跃时间。")
     rating: int | None = Field(default=None, description="满意度评分。")
     updated_at: datetime | None = Field(default=None, alias="updatedAt", description="会话更新时间。")
@@ -66,3 +67,10 @@ class RatingRequest(BaseModel):
 
     rating: int = Field(..., ge=1, le=5, description="满意度评分，1 到 5。")
     comment: str | None = Field(default=None, max_length=500, description="评价文字，可选。")
+
+
+class AgentTransferRequest(BaseModel):
+    """坐席转接请求体。"""
+
+    target_agent_id: int = Field(..., alias="targetAgentId", description="目标坐席用户 ID。")
+    reason: str | None = Field(default=None, max_length=500, description="转接原因备注，可选。")

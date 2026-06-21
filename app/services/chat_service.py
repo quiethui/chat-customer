@@ -110,9 +110,18 @@ class ChatService:
         # 读取最近聊天上下文，返回可放入 Prompt 的历史消息列表。
         history = self._get_history(customer_id, session_id)
 
-        # RAG 检索：问题向量化 -> 向量检索 -> 精选上下文。
+        # RAG 检索：问题向量化 -> 向量检索 -> 精选上下文。向量数据库服务异常时不中断服务。
         start_time = perf_counter()
-        results, contexts, search_limit = self._retrieve(question, knowledge_base_ids, file_ids)
+        try:
+            results, contexts, search_limit = self._retrieve(question, knowledge_base_ids, file_ids)
+        except Exception:
+            logger.warning(
+                "向量检索失败，将不使用知识库上下文：customer_id=%s session_id=%s",
+                customer_id,
+                session_id,
+                exc_info=True,
+            )
+            results, contexts, search_limit = [], [], 0
         if rag_test:
             return self._build_rag_test_result(question, contexts, history, results, search_limit, start_time, session_id)
 
@@ -153,7 +162,18 @@ class ChatService:
         """
         session_id = session_id or self._create_session(customer_id, question)
         history = self._get_history(customer_id, session_id)
-        _, contexts, _ = self._retrieve(question, knowledge_base_ids, file_ids)
+
+        # RAG 检索：向量数据库服务异常时不中断服务，contexts 置空，只用历史上下文和工具回答。
+        try:
+            _, contexts, _ = self._retrieve(question, knowledge_base_ids, file_ids)
+        except Exception:
+            logger.warning(
+                "向量检索失败，将不使用知识库上下文：customer_id=%s session_id=%s",
+                customer_id,
+                session_id,
+                exc_info=True,
+            )
+            contexts = []
 
         # 客户消息先落库并提交，确保即使后续模型调用失败也能保留客户输入。
         self.mysql_repository.add_chat_message(session_id, customer_id, "user", question, sender_type="customer")

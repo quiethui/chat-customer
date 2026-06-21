@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.repositories.conversation_bus import ConversationBus
-from app.repositories.mysql.records import ChatMessageRecord, ChatSessionRecord, CustomerRecord
+from app.repositories.mysql.records import ChatMessageRecord, ChatSessionRecord, CustomerRecord, ManagerRecord
 from app.repositories.mysql_repository import MySQLRepository
 
 # 坐席队列默认展示的会话状态：等待接入与服务中。
@@ -38,16 +38,26 @@ class ConversationService:
         self.repository = repository
         self.bus = bus
 
-    def list_queue(self, statuses: list[str] | None, page: int = 1, page_size: int = 25) -> list[ConversationView]:
-        """查询坐席会话队列（全量），并补充每条会话的客户信息。
+    def list_queue(
+        self,
+        statuses: list[str] | None,
+        agent: ManagerRecord | None = None,
+        scope: str = "mine",
+        page: int = 1,
+        page_size: int = 25,
+    ) -> list[ConversationView]:
+        """查询坐席会话队列，并补充每条会话的客户信息。
 
         Args:
             statuses: 需要过滤的会话状态；为空时使用默认（等待+服务中）。
+            agent: 当前坐席用户记录，scope=mine 时必传。
+            scope: 队列范围，mine=自己接管的+待接入公共池，all=全部会话。
             page: 分页页码。
             page_size: 每页返回的记录数量。
         """
         effective = statuses if statuses else list(DEFAULT_QUEUE_STATUSES)
-        sessions = self.repository.list_conversations(effective, max(page, 1), min(max(page_size, 1), 100))
+        mine_agent_id = agent.id if scope == "mine" and agent else None
+        sessions = self.repository.list_conversations(effective, max(page, 1), min(max(page_size, 1), 100), mine_agent_id)
         return [ConversationView(session=item, customer=self._customer(item.customer_id)) for item in sessions]
 
     def get_conversation(self, session_id: str) -> ConversationView:
@@ -135,11 +145,11 @@ class ConversationService:
         )
         return record
 
-    def reply(self, agent_id: int, session_id: str, content: str) -> ChatMessageRecord:
+    def reply(self, agent: ManagerRecord, session_id: str, content: str) -> ChatMessageRecord:
         """坐席回复消息：落库 sender_type=agent 并推送到客户 SSE。
 
         Args:
-            agent_id: 发送消息的坐席用户 ID。
+            agent: 发送消息的坐席用户记录。
             session_id: 聊天会话 ID。
             content: 坐席回复正文。
         """
@@ -151,13 +161,15 @@ class ConversationService:
             raise ValueError("会话不存在")
         if session.status != "serving":
             raise ValueError("请先接管会话再回复")
-        message = self.repository.add_agent_message(session_id, agent_id, text)
+        if not agent.is_admin and session.assigned_agent_id != agent.id:
+            raise PermissionError("您没有权限回复此会话")
+        message = self.repository.add_agent_message(session_id, agent.id, text)
         if not message:
             raise ValueError("会话不存在")
         self.repository.commit()
         self.bus.publish(
             session_id,
-            {"type": "agent_message", "text": text, "messageId": message.id, "agentId": agent_id},
+            {"type": "agent_message", "text": text, "messageId": message.id, "agentId": agent.id},
         )
         return message
 
@@ -202,12 +214,18 @@ class ConversationService:
         )
         return message
 
-    def close(self, session_id: str) -> ChatSessionRecord:
+    def close(self, agent: ManagerRecord, session_id: str) -> ChatSessionRecord:
         """关闭会话：状态置为 closed 并通知客户会话结束。
 
         Args:
+            agent: 操作的坐席用户记录。
             session_id: 聊天会话 ID。
         """
+        session = self.repository.get_conversation(session_id)
+        if not session:
+            raise ValueError("会话不存在")
+        if session.status == "serving" and not agent.is_admin and session.assigned_agent_id != agent.id:
+            raise PermissionError("您没有权限关闭此会话")
         record = self.repository.update_conversation_status(session_id, "closed")
         if not record:
             raise ValueError("会话不存在")
@@ -215,12 +233,18 @@ class ConversationService:
         self.bus.publish(session_id, {"type": "status", "status": "closed", "message": "会话已结束，感谢您的咨询"})
         return record
 
-    def handback(self, session_id: str) -> ChatSessionRecord:
+    def handback(self, agent: ManagerRecord, session_id: str) -> ChatSessionRecord:
         """交还机器人：状态置回 bot、清空坐席，并通知客户已切回智能助手。
 
         Args:
+            agent: 操作的坐席用户记录。
             session_id: 聊天会话 ID。
         """
+        session = self.repository.get_conversation(session_id)
+        if not session:
+            raise ValueError("会话不存在")
+        if session.status == "serving" and not agent.is_admin and session.assigned_agent_id != agent.id:
+            raise PermissionError("您没有权限交还此会话")
         record = self.repository.update_conversation_status(session_id, "bot", mode="bot", clear_agent=True)
         if not record:
             raise ValueError("会话不存在")
@@ -241,6 +265,51 @@ class ConversationService:
         if not record:
             raise ValueError("会话不存在")
         self.repository.commit()
+        return record
+
+    def transfer(self, agent: ManagerRecord, session_id: str, target_agent_id: int, reason: str | None) -> ChatSessionRecord:
+        """会话转接：将 serving 会话从当前坐席转给目标坐席。
+
+        Args:
+            agent: 操作的坐席用户记录。
+            session_id: 聊天会话 ID。
+            target_agent_id: 目标坐席用户 ID。
+            reason: 转接原因备注，可为空。
+        """
+        session = self.repository.get_conversation(session_id)
+        if not session:
+            raise ValueError("会话不存在")
+        if session.status != "serving":
+            raise ValueError("只能转接服务中的会话")
+        if not agent.is_admin and session.assigned_agent_id != agent.id:
+            raise PermissionError("您没有权限转接此会话")
+        if target_agent_id == session.assigned_agent_id:
+            raise ValueError("不能转接给当前坐席")
+        target_agent = self.repository.get_manager_by_id(target_agent_id)
+        if not target_agent or target_agent.deleted_at is not None or target_agent.status != 1:
+            raise ValueError("目标坐席不存在或不可用")
+        record = self.repository.update_conversation_assigned_agent(session_id, target_agent_id)
+        if not record:
+            raise ValueError("会话不存在")
+        self.repository.commit()
+        self.bus.publish(
+            session_id,
+            {
+                "type": "status",
+                "status": "serving",
+                "message": f"已为您转接到客服 {target_agent.nickname}",
+            },
+        )
+        self.bus.publish_broadcast(
+            {
+                "type": "handoff_transferred",
+                "sessionId": session_id,
+                "fromAgentId": session.assigned_agent_id,
+                "toAgentId": target_agent_id,
+                "toAgentName": target_agent.nickname,
+                "reason": reason,
+            }
+        )
         return record
 
     def _customer(self, customer_id: int) -> CustomerRecord | None:

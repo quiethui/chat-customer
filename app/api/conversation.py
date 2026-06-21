@@ -11,7 +11,7 @@ from app.core.response import success_response
 from app.dependencies import get_conversation_bus, get_conversation_service, get_current_agent_manager
 from app.repositories.conversation_bus import ConversationBus
 from app.repositories.mysql.records import ChatMessageRecord, ManagerRecord
-from app.schemas.conversation import AgentReplyRequest, ConversationMessageItem, ConversationQueueItem
+from app.schemas.conversation import AgentReplyRequest, AgentTransferRequest, ConversationMessageItem, ConversationQueueItem
 from app.services.conversation_service import ConversationService, ConversationView
 
 router = APIRouter(prefix="/system/conversations", tags=["conversation"])
@@ -44,9 +44,31 @@ async def agent_events(
     )
 
 
+@router.get("/agents")
+def list_available_agents(
+    agent: ManagerRecord = Depends(get_current_agent_manager),
+    service: ConversationService = Depends(get_conversation_service),
+) -> dict[str, Any]:
+    """获取可用坐席列表（用于转接）。
+
+    Args:
+        agent: 当前坐席用户记录。
+        service: 会话编排服务实例。
+    """
+    _ = agent
+    managers = service.repository.list_managers(1, 100)
+    agents = [
+        {"id": m.id, "nickname": m.nickname or m.username}
+        for m in managers[0]
+        if m.status == 1 and m.deleted_at is None
+    ]
+    return success_response(data=agents, message="获取成功")
+
+
 @router.get("")
 def list_conversations(
     status_filter: str | None = Query(default=None, alias="status"),
+    scope: str = Query(default="mine", pattern="^(mine|all)$"),
     page: int = 1,
     agent: ManagerRecord = Depends(get_current_agent_manager),
     service: ConversationService = Depends(get_conversation_service),
@@ -55,13 +77,14 @@ def list_conversations(
 
     Args:
         status_filter: 逗号分隔的会话状态过滤字符串，例如 waiting,serving。
+        scope: 队列范围，mine=自己的+待接入，all=全部会话。
         page: 分页页码。
         agent: 当前坐席用户记录。
         service: 会话编排服务实例。
     """
     statuses = [item.strip() for item in status_filter.split(",") if item.strip()] if status_filter else None
-    views = service.list_queue(statuses, page=page)
-    data = [_to_queue_item(view).model_dump(by_alias=True) for view in views]
+    views = service.list_queue(statuses, agent, scope, page=page)
+    data = [_to_queue_item(view, service.repository).model_dump(by_alias=True) for view in views]
     return success_response(data=data, message="获取成功")
 
 
@@ -115,10 +138,15 @@ def reply(
         agent: 当前坐席用户记录。
         service: 会话编排服务实例。
     """
-    message = run_with_value_error(
-        lambda: service.reply(agent.id, session_id, request.content), status.HTTP_400_BAD_REQUEST
-    )
-    return success_response(data=_to_message_item(message).model_dump(by_alias=True), message="回复成功")
+    try:
+        message = service.reply(agent, session_id, request.content)
+        return success_response(data=_to_message_item(message).model_dump(by_alias=True), message="回复成功")
+    except PermissionError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
 
 @router.post("/{session_id}/close")
@@ -134,8 +162,15 @@ def close(
         agent: 当前坐席用户记录。
         service: 会话编排服务实例。
     """
-    record = run_with_value_error(lambda: service.close(session_id), status.HTTP_404_NOT_FOUND)
-    return success_response(data={"sessionId": record.id, "status": record.status}, message="已关闭会话")
+    try:
+        record = service.close(agent, session_id)
+        return success_response(data={"sessionId": record.id, "status": record.status}, message="已关闭会话")
+    except PermissionError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
 @router.post("/{session_id}/handback")
@@ -151,17 +186,58 @@ def handback(
         agent: 当前坐席用户记录。
         service: 会话编排服务实例。
     """
-    record = run_with_value_error(lambda: service.handback(session_id), status.HTTP_404_NOT_FOUND)
-    return success_response(data={"sessionId": record.id, "status": record.status}, message="已交还智能助手")
+    try:
+        record = service.handback(agent, session_id)
+        return success_response(data={"sessionId": record.id, "status": record.status}, message="已交还智能助手")
+    except PermissionError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
-def _to_queue_item(view: ConversationView) -> ConversationQueueItem:
+@router.post("/{session_id}/transfer")
+def transfer(
+    session_id: str,
+    request: AgentTransferRequest,
+    agent: ManagerRecord = Depends(get_current_agent_manager),
+    service: ConversationService = Depends(get_conversation_service),
+) -> dict[str, Any]:
+    """转接会话给其他坐席。
+
+    Args:
+        session_id: 聊天会话 ID。
+        request: 转接请求体。
+        agent: 当前坐席用户记录。
+        service: 会话编排服务实例。
+    """
+    try:
+        record = service.transfer(agent, session_id, request.target_agent_id, request.reason)
+        return success_response(
+            data={"sessionId": record.id, "status": record.status, "assignedAgentId": record.assigned_agent_id},
+            message="转接成功",
+        )
+    except PermissionError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+
+def _to_queue_item(view: ConversationView, repository) -> ConversationQueueItem:
     """将会话视图转换为坐席队列项响应模型。
 
     Args:
         view: 会话编排服务返回的会话视图。
+        repository: 数据仓储实例，用于查询坐席信息。
     """
     session = view.session
+    agent_name = None
+    if session.assigned_agent_id:
+        agent = repository.get_manager_by_id(session.assigned_agent_id)
+        agent_name = agent.nickname if agent else None
     return ConversationQueueItem(
         session_id=session.id,
         customer_id=session.customer_id,
@@ -170,6 +246,7 @@ def _to_queue_item(view: ConversationView) -> ConversationQueueItem:
         status=session.status,
         mode=session.mode,
         assigned_agent_id=session.assigned_agent_id,
+        assigned_agent_name=agent_name,
         last_message_at=session.last_message_at,
         rating=session.rating,
         updated_at=session.updated_at,

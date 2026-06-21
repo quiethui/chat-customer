@@ -152,3 +152,37 @@ async def test_answer_rag_test_mode_skips_model() -> None:
     assert result.rag_test is True
     assert result.rag_debug is not None
     assert mysql.messages == []  # 测试模式不落库
+
+
+class FakeVectorRepositoryWithError:
+    """模拟向量数据库服务异常的假仓储。"""
+
+    def search(self, vector: list[float], top_k: int, filters: Any = None) -> list[RetrievalResult]:
+        raise RuntimeError("向量数据库连接失败")
+
+
+async def test_answer_handles_vector_db_failure() -> None:
+    """向量数据库服务异常时不中断服务，继续用历史上下文和工具回答。"""
+    llm = FakeLLMClient(enabled=True, chat_message={"role": "assistant", "content": "已为您处理"})
+    mysql = FakeMySQLRepository()
+    context = FakeContextRepository()
+    tool_registry = SimpleToolRegistry([])
+    service = ChatService(
+        embedding=FakeEmbedding(),  # type: ignore[arg-type]
+        repository=FakeVectorRepositoryWithError(),  # type: ignore[arg-type]
+        llm_client=llm,  # type: ignore[arg-type]
+        top_k=4,
+        reference_limit=3,
+        reference_max_chars=240,
+        mysql_repository=mysql,  # type: ignore[arg-type]
+        context_repository=context,  # type: ignore[arg-type]
+        tool_registry=tool_registry,
+        agent_executor=AgentExecutor(llm, tool_registry, max_rounds=3),  # type: ignore[arg-type]
+    )
+
+    result = await service.answer("你好", customer_id=1)
+
+    assert result.answer == "已为您处理"
+    assert result.session_id
+    assert result.references == []  # 向量检索失败，无知识库引用
+    assert [m["role"] for m in mysql.messages] == ["user", "assistant"]

@@ -248,18 +248,23 @@ class ChatMySQLMixin(BaseMySQLMixin):
         statuses: list[str] | None,
         page: int,
         page_size: int,
+        mine_agent_id: int | None = None,
     ) -> list[ChatSessionRecord]:
-        """分页查询坐席会话队列（全量，不按客户隔离），按最近活跃倒序。
+        """分页查询坐席会话队列（全量或我的），按最近活跃倒序。
 
         Args:
             statuses: 需要过滤的会话状态列表；为空时返回全部未删除会话。
             page: 分页页码，从 1 开始。
             page_size: 每页返回的记录数量。
+            mine_agent_id: scope=mine 时传入当前坐席 ID，只返回自己接管的+waiting 公共池；None 时返回全部。
         """
         offset = max(page - 1, 0) * page_size
         conditions = [ChatSession.deleted_at.is_(None)]
         if statuses:
             conditions.append(ChatSession.status.in_(statuses))
+        if mine_agent_id is not None:
+            from sqlalchemy import or_
+            conditions.append(or_(ChatSession.assigned_agent_id == mine_agent_id, ChatSession.status == "waiting"))
         rows = self._scalars(
             select(ChatSession)
             .where(*conditions)
@@ -438,6 +443,24 @@ class ChatMySQLMixin(BaseMySQLMixin):
         self._execute(
             update(ChatSession).where(ChatSession.id == session_id).values(last_message_at=_utc_now())
         )
+
+    def update_conversation_assigned_agent(self, session_id: str, new_agent_id: int) -> ChatSessionRecord | None:
+        """更新会话接管坐席（转接用）。
+
+        Args:
+            session_id: 聊天会话 ID。
+            new_agent_id: 新坐席用户 ID。
+        """
+        row = self._scalar_one_or_none(
+            select(ChatSession).where(ChatSession.id == session_id, ChatSession.deleted_at.is_(None)).limit(1)
+        )
+        if not row:
+            return None
+        row.assigned_agent_id = new_agent_id
+        row.last_message_at = _utc_now()
+        self._flush()
+        self._refresh(row)
+        return map_chat_session(row)
 
 
 def _utc_now() -> datetime:

@@ -84,18 +84,29 @@ def get_embedding() -> HashEmbedding:
 
 @lru_cache(maxsize=1)
 def get_vector_repository() -> VectorRepository:
-    """返回缓存后的向量仓储。"""
+    """返回缓存后的向量仓储。向量数据库服务不可用时降级到空实现，不中断服务。"""
     settings = get_app_settings()
     embedding = get_embedding()
     if settings.vector_backend == "memory":
         logger.warning("VECTOR_BACKEND=memory 仅适合本地开发，服务重启或多进程部署会丢失向量索引")
-    return create_vector_repository(
-        settings.vector_backend,
-        embedding.dimension,
-        settings.milvus_uri,
-        settings.milvus_token,
-        settings.milvus_collection,
-    )
+    try:
+        return create_vector_repository(
+            settings.vector_backend,
+            embedding.dimension,
+            settings.milvus_uri,
+            settings.milvus_token,
+            settings.milvus_collection,
+        )
+    except Exception:
+        logger.error(
+            "向量数据库连接失败，降级到内存空实现（查询始终返回空）：backend=%s uri=%s",
+            settings.vector_backend,
+            settings.milvus_uri,
+            exc_info=True,
+        )
+        # 返回内存空实现，查询始终返回空列表，不会抛异常。
+        from app.repositories.vector.memory import MemoryVectorRepository
+        return MemoryVectorRepository(embedding.dimension)
 
 
 @lru_cache(maxsize=1)
