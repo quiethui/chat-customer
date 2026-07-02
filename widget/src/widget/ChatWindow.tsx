@@ -27,8 +27,8 @@ interface ChatWindowProps {
 }
 
 export function ChatWindow({ chat, customer, onClose, onLogin, onRegister, onLogout }: ChatWindowProps) {
-  const { messages, status, hint, sending, hasSession, send, handoff, rate, loadSession, reset } = chat;
-  const [rated, setRated] = useState(false);
+  const { messages, status, rating, hint, sending, hasSession, send, handoff, rate, loadSession, reset } = chat;
+  const [ratingSubmitting, setRatingSubmitting] = useState(false);
   const [hover, setHover] = useState(0);
   const [view, setView] = useState<'chat' | 'list'>('chat');
   const [authOpen, setAuthOpen] = useState(false);
@@ -50,11 +50,14 @@ export function ChatWindow({ chat, customer, onClose, onLogin, onRegister, onLog
   }, [messages, hint]);
 
   const handleRate = async (score: number) => {
+    if (rating != null || ratingSubmitting) return;
+    setRatingSubmitting(true);
     try {
       await rate(score);
-      setRated(true);
     } catch {
       // 评分失败忽略
+    } finally {
+      setRatingSubmitting(false);
     }
   };
 
@@ -112,15 +115,13 @@ export function ChatWindow({ chat, customer, onClose, onLogin, onRegister, onLog
 
       {view === 'list' ? (
         <ConversationList
-          onSelect={async (sessionId, sessionStatus) => {
-            await loadSession(sessionId, sessionStatus);
-            setRated(false);
+          onSelect={async (sessionId, sessionStatus, sessionRating) => {
+            await loadSession(sessionId, sessionStatus, sessionRating);
             setView('chat');
           }}
           onBack={() => setView('chat')}
           onNew={() => {
             reset();
-            setRated(false);
             setView('chat');
           }}
         />
@@ -141,14 +142,13 @@ export function ChatWindow({ chat, customer, onClose, onLogin, onRegister, onLog
           <div className="aics-footer">
             {status === 'closed' ? (
               <div className="aics-rating">
-                {rated ? (
+                {rating != null ? (
                   <div className="aics-rating-done">
                     感谢您的评价！
                     <button
                       className="aics-link"
                       type="button"
                       onClick={() => {
-                        setRated(false);
                         reset();
                       }}
                     >
@@ -163,7 +163,8 @@ export function ChatWindow({ chat, customer, onClose, onLogin, onRegister, onLog
                         <button
                           key={score}
                           type="button"
-                          className={`aics-star ${score <= hover ? 'on' : ''}`}
+                          className={`aics-star ${score <= (hover || rating || 0) ? 'on' : ''}`}
+                          disabled={ratingSubmitting}
                           onMouseEnter={() => setHover(score)}
                           onClick={() => handleRate(score)}
                         >

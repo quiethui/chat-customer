@@ -17,6 +17,7 @@ const nextId = (): string => `m${++messageSeq}`;
 
 /** localStorage 中记录当前活跃会话 ID 的键，供复访快速恢复。 */
 const ACTIVE_KEY = 'aics_active_session';
+const RATING_KEY_PREFIX = 'aics_rated_session:';
 
 /** 把历史消息的 senderType 收敛到挂件渲染用的发送方。 */
 const toSender = (senderType: string): SenderType =>
@@ -25,13 +26,14 @@ const toSender = (senderType: string): SenderType =>
 interface ChatStream {
   messages: WidgetMessage[];
   status: ConversationStatus;
+  rating: number | null;
   hint: string;
   sending: boolean;
   hasSession: boolean;
   send: (text: string) => Promise<void>;
   handoff: () => Promise<void>;
   rate: (score: number, comment?: string) => Promise<void>;
-  loadSession: (sessionId: string, sessionStatus: ConversationStatus) => Promise<void>;
+  loadSession: (sessionId: string, sessionStatus: ConversationStatus, sessionRating?: number | null) => Promise<void>;
   reset: () => void;
 }
 
@@ -39,11 +41,13 @@ interface ChatStream {
 export function useChatStream(): ChatStream {
   const [messages, setMessages] = useState<WidgetMessage[]>([]);
   const [status, setStatus] = useState<ConversationStatus>('bot');
+  const [rating, setRating] = useState<number | null>(null);
   const [hint, setHint] = useState('');
   const [sending, setSending] = useState(false);
   const [hasSession, setHasSession] = useState(false);
   const sessionIdRef = useRef<string>('');
   const eventsAbortRef = useRef<AbortController | null>(null);
+  const ratingSubmittingRef = useRef(false);
 
   const rememberSession = useCallback((sessionId?: string) => {
     if (sessionId && sessionId !== sessionIdRef.current) {
@@ -151,13 +155,23 @@ export function useChatStream(): ChatStream {
   /** 提交满意度评分。 */
   const rate = useCallback(async (score: number, comment?: string) => {
     const sessionId = sessionIdRef.current;
-    if (!sessionId) return;
-    await rateConversation(sessionId, score, comment);
-  }, []);
+    if (!sessionId || rating != null || ratingSubmittingRef.current) return;
+    ratingSubmittingRef.current = true;
+    try {
+      const result = await rateConversation(sessionId, score, comment);
+      const submittedRating = result.rating ?? score;
+      setRating(submittedRating);
+      localStorage.setItem(`${RATING_KEY_PREFIX}${sessionId}`, String(submittedRating));
+      localStorage.removeItem(ACTIVE_KEY);
+      setHasSession(false);
+    } finally {
+      ratingSubmittingRef.current = false;
+    }
+  }, [rating]);
 
   /** 载入某个会话的历史消息并设为当前会话（复访恢复 / 历史列表点击）。 */
   const loadSession = useCallback(
-    async (sessionId: string, sessionStatus: ConversationStatus) => {
+    async (sessionId: string, sessionStatus: ConversationStatus, sessionRating?: number | null) => {
       eventsAbortRef.current?.abort();
       eventsAbortRef.current = null;
       try {
@@ -169,6 +183,7 @@ export function useChatStream(): ChatStream {
       sessionIdRef.current = sessionId;
       setHasSession(true);
       setStatus(sessionStatus);
+      setRating(sessionRating ?? (Number(localStorage.getItem(RATING_KEY_PREFIX + sessionId)) || null));
       setHint('');
       localStorage.setItem(ACTIVE_KEY, sessionId);
       // 人工模式恢复时继续订阅坐席推送。
@@ -185,9 +200,10 @@ export function useChatStream(): ChatStream {
     setHasSession(false);
     setMessages([]);
     setStatus('bot');
+    setRating(null);
     setHint('');
     localStorage.removeItem(ACTIVE_KEY);
   }, []);
 
-  return { messages, status, hint, sending, hasSession, send, handoff, rate, loadSession, reset };
+  return { messages, status, rating, hint, sending, hasSession, send, handoff, rate, loadSession, reset };
 }

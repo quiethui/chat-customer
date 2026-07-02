@@ -6,7 +6,7 @@ import type { ConversationStatus, ConversationSummary } from '../types';
 
 interface ConversationListProps {
   /** 点击某条会话，载入并切回对话视图。 */
-  onSelect: (sessionId: string, status: ConversationStatus) => void;
+  onSelect: (sessionId: string, status: ConversationStatus, rating?: number | null) => void;
   /** 返回对话视图。 */
   onBack: () => void;
   /** 开启新会话。 */
@@ -71,7 +71,7 @@ export function ConversationList({ onSelect, onBack, onNew }: ConversationListPr
               key={item.sessionId}
               type="button"
               className="aics-conv-item"
-              onClick={() => onSelect(item.sessionId, item.status)}
+              onClick={() => onSelect(item.sessionId, item.status, item.rating)}
             >
               <div className="aics-conv-title">{item.sessionTitle || '未命名会话'}</div>
               <div className="aics-conv-meta">

@@ -33,6 +33,7 @@ export interface ConversationSummary {
   sessionTitle: string;
   status: ConversationStatus;
   mode: string;
+  rating?: number | null;
   lastMessageAt?: string | null;
   updatedAt?: string | null;
   createdAt?: string | null;

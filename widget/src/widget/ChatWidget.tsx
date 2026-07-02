@@ -26,11 +26,12 @@ export function ChatWidget() {
         if (cancelled) return;
         const active = localStorage.getItem(ACTIVE_KEY);
         const preferred =
-          (active ? list.find((item) => item.sessionId === active) : undefined) ??
-          list.find((item) => item.status !== 'closed') ??
-          list[0];
+          (active
+            ? list.find((item) => item.sessionId === active && (item.status !== 'closed' || item.rating == null))
+            : undefined) ??
+          list.find((item) => item.status !== 'closed');
         if (preferred) {
-          await chat.loadSession(preferred.sessionId, preferred.status);
+          await chat.loadSession(preferred.sessionId, preferred.status, preferred.rating);
         } else {
           chat.reset();
         }
